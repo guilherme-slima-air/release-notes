@@ -17,4 +17,8 @@ Embora o foco principal seja Salesforce, a estrutura e o fluxo deste projeto per
 2. Inicie o servidor:
    - `npm start`
 3. Abra no navegador:
-   - `http://localhost:3000`
+   - `http://localhost:3030`
+
+## Banco de dados local
+
+No primeiro start, o arquivo `release.db` e as tabelas sao criados automaticamente.
