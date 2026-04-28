@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerador de Release Notes</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="hero">
+            <p class="eyebrow">Operacoes de entrega</p>
+            <h1>Gerador de release notes</h1>
+            <p class="hero-copy">
+                Cadastre metadados Salesforce por frente e sprint, filtre por contexto e gere um texto de release
+                pronto para enviar para o time.
+            </p>
+        </header>
+
+        <section class="tab-switcher" role="tablist" aria-label="Modulos">
+            <button id="tab-btn-metadata" class="tab-switch is-active" type="button" role="tab" aria-selected="true">Incluir metadados</button>
+            <button id="tab-btn-release" class="tab-switch" type="button" role="tab" aria-selected="false">Gerar release notes</button>
+        </section>
+
+        <section id="tab-pane-metadata" class="tab-pane">
+            <section class="panel form-panel">
+                <div class="section-head">
+                    <h2>Novo item de release</h2>
+                </div>
+
+                <form id="metadata-form" novalidate autocomplete="off">
+                    <div class="form-grid">
+                        <div class="field">
+                            <label for="f-front-select">Frente / Projeto *</label>
+                            <div class="lookup-wrap">
+                                <select id="f-front-select"></select>
+                                <button type="button" class="btn-lookup-add" id="btn-add-front" title="Nova frente">+</button>
+                            </div>
+                            <div class="lookup-add-row" id="add-front-row" hidden>
+                                <input type="text" id="f-front-new" placeholder="Nome da nova frente">
+                                <button type="button" class="btn-secondary btn-sm" id="btn-save-front">Salvar</button>
+                                <button type="button" class="btn-secondary btn-sm" id="btn-cancel-front">Cancelar</button>
+                            </div>
+                        </div>
+
+                        <div class="field">
+                            <label for="f-sprint-select">Sprint *</label>
+                            <div class="lookup-wrap">
+                                <select id="f-sprint-select" disabled></select>
+                                <button type="button" class="btn-lookup-add" id="btn-add-sprint" title="Nova sprint" disabled>+</button>
+                            </div>
+                            <div class="lookup-add-row" id="add-sprint-row" hidden>
+                                <input type="text" id="f-sprint-new" placeholder="Nome da nova sprint">
+                                <button type="button" class="btn-secondary btn-sm" id="btn-save-sprint">Salvar</button>
+                                <button type="button" class="btn-secondary btn-sm" id="btn-cancel-sprint">Cancelar</button>
+                            </div>
+                        </div>
+
+                        <div class="field field-full">
+                            <span>Importar metadados por commit</span>
+                            <div class="commit-import-grid">
+                                <input id="f-repo-path" type="text" placeholder="Caminho local do repositorio git (ex.: C:/repos/salesforce)">
+                                <input id="f-commit-hash" type="text" placeholder="Hash do commit (ex.: a1b2c3d4)">
+                                <button type="button" id="btn-load-commit" class="btn-secondary">Buscar no commit</button>
+                            </div>
+                            <p class="field-hint">Busca os arquivos alterados no commit e preenche a lista de metadados automaticamente.</p>
+                            <div id="commit-info" class="form-info" hidden></div>
+                        </div>
+
+                        <div id="bulk-fields" class="field field-full">
+                            <span>Metadatas do lote *</span>
+                            <div id="bulk-metadata-rows" class="bulk-rows"></div>
+                            <button type="button" id="btn-bulk-add-metadata" class="btn-secondary btn-sm">+ Adicionar metadata</button>
+                            <p class="field-hint">Cada linha define nome, tipo do metadata e tipo de mudanca usando o mesmo contexto e descricao.</p>
+
+                            <span>PRs do lote *</span>
+                            <div id="bulk-pr-rows" class="bulk-rows"></div>
+                            <button type="button" id="btn-bulk-add-pr" class="btn-secondary btn-sm">+ Adicionar PR</button>
+                            <p class="field-hint">Informe label e link do PR para vincular em todos os metadatas do lote.</p>
+                        </div>
+
+                        <div class="field">
+                            <label for="f-type-select">Cadastro de tipo (opcional)</label>
+                            <div class="lookup-wrap">
+                                <select id="f-type-select"></select>
+                                <button type="button" class="btn-lookup-add" id="btn-add-type" title="Novo tipo">+</button>
+                            </div>
+                            <div class="lookup-add-row" id="add-type-row" hidden>
+                                <input type="text" id="f-type-new" placeholder="Nome do novo tipo de metadata">
+                                <button type="button" class="btn-secondary btn-sm" id="btn-save-type">Salvar</button>
+                                <button type="button" class="btn-secondary btn-sm" id="btn-cancel-type">Cancelar</button>
+                            </div>
+                        </div>
+
+                        <label class="field">
+                            <span>Ticket (opcional)</span>
+                            <input id="f-ticket" type="text" placeholder="Ex.: CHG-2481">
+                        </label>
+
+                        <label class="field field-full">
+                            <span>Descricao da alteracao *</span>
+                            <textarea id="f-description" rows="3" required placeholder="O que mudou e por que"></textarea>
+                        </label>
+                    </div>
+
+                    <div id="form-error" class="form-error" hidden></div>
+                    <div id="form-info" class="form-info" hidden></div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn-primary">Cadastrar item</button>
+                        <button type="button" id="btn-clear-form" class="btn-secondary">Limpar</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="panel list-panel">
+                <div class="section-head">
+                    <h2>Itens cadastrados</h2>
+                    <strong id="count-label">0 itens</strong>
+                </div>
+
+                <div class="filter-grid" id="metadata-filters">
+                    <label class="field">
+                        <span>Frente</span>
+                        <select id="metadata-filter-front">
+                            <option value="">Todas</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span>Sprint</span>
+                        <select id="metadata-filter-sprint">
+                            <option value="">Todas</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span>Tipo do metadata</span>
+                        <select id="metadata-filter-type">
+                            <option value="">Todos</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span>Busca</span>
+                        <input id="metadata-filter-search" type="search" placeholder="Buscar por metadata, ticket ou descricao">
+                    </label>
+
+                    <button type="button" id="btn-reset-metadata-filters" class="btn-secondary">Resetar</button>
+                </div>
+
+                <div id="items-list" class="items-list"></div>
+            </section>
+        </section>
+
+        <section id="tab-pane-release" class="tab-pane" hidden>
+            <section class="panel filters-panel">
+                <div class="section-head">
+                    <h2>Filtros e geracao</h2>
+                </div>
+
+                <div class="filter-grid">
+                    <label class="field">
+                        <span>Frente</span>
+                        <select id="filter-front">
+                            <option value="">Todas</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span>Sprint</span>
+                        <select id="filter-sprint">
+                            <option value="">Todas</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span>Tipo do metadata</span>
+                        <select id="filter-type">
+                            <option value="">Todos</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span>Busca</span>
+                        <input id="filter-search" type="search" placeholder="Buscar por metadata, ticket ou descricao">
+                    </label>
+                </div>
+
+                <div class="filter-actions">
+                    <button type="button" id="btn-reset-filters" class="btn-secondary">Resetar filtros</button>
+                    <button type="button" id="btn-generate" class="btn-primary">Gerar release note</button>
+                    <button type="button" id="btn-copy-release" class="btn-secondary">Copiar release</button>
+                </div>
+
+                <p id="release-meta" class="release-meta">Sem dados para gerar release note.</p>
+                <textarea id="release-output" class="release-output" rows="14" readonly placeholder="Seu release note sera gerado aqui..."></textarea>
+            </section>
+        </section>
+
+        <!-- Modal de Edição -->
+        <div id="edit-modal" class="modal" hidden>
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Editar metadata</h3>
+                    <button type="button" class="btn-modal-close" id="btn-close-edit-modal">✕</button>
+                </div>
+                <form id="edit-form" novalidate autocomplete="off">
+                    <div class="form-grid">
+                        <label class="field field-full">
+                            <span>Metadata *</span>
+                            <input id="edit-metadata-name" type="text" readonly disabled placeholder="Nome do metadata">
+                        </label>
+
+                        <label class="field">
+                            <span>Tipo do metadata *</span>
+                            <select id="edit-metadata-type" disabled></select>
+                        </label>
+
+                        <label class="field">
+                            <span>Tipo de mudança *</span>
+                            <select id="edit-change-type"></select>
+                        </label>
+
+                        <label class="field">
+                            <span>Ticket (opcional)</span>
+                            <input id="edit-ticket" type="text" placeholder="Ex.: CHG-2481">
+                        </label>
+
+                        <label class="field field-full">
+                            <span>Descrição da alteração *</span>
+                            <textarea id="edit-description" rows="3" required placeholder="O que mudou e por que"></textarea>
+                        </label>
+                    </div>
+
+                    <div id="edit-form-error" class="form-error" hidden></div>
+
+                    <div class="modal-actions">
+                        <button type="submit" class="btn-primary">Salvar alterações</button>
+                        <button type="button" class="btn-secondary" id="btn-cancel-edit">Cancelar</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="./app.js"></script>
+</body>
+</html>
