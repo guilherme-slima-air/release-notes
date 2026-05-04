@@ -44,7 +44,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS metadatas (
     id               TEXT    PRIMARY KEY,
     front_id         INTEGER NOT NULL REFERENCES fronts(id),
-    sprint_id        INTEGER NOT NULL REFERENCES sprints(id),
+    sprint_id        INTEGER REFERENCES sprints(id),
     metadata_name    TEXT    NOT NULL,
     metadata_type_id INTEGER NOT NULL REFERENCES metadata_types(id),
     change_type      TEXT    NOT NULL,
@@ -67,6 +67,31 @@ db.exec(`
       description = TRIM(description),
       ticket = NULLIF(TRIM(COALESCE(ticket, '')), '');
 `);
+
+// Em migracoes antigas, pull_requests pode ter ficado apontando para metadatas_old.
+(function repairPullRequestsForeignKey() {
+    const fkRows = db.prepare('PRAGMA foreign_key_list(pull_requests)').all();
+    const metadataFk = fkRows.find(function(row) { return row.from === 'metadata_id'; });
+    if (metadataFk && metadataFk.table !== 'metadatas') {
+        db.exec('PRAGMA foreign_keys = OFF');
+        db.exec(`
+            ALTER TABLE pull_requests RENAME TO pull_requests_old;
+            CREATE TABLE pull_requests (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                metadata_id TEXT    NOT NULL REFERENCES metadatas(id) ON DELETE CASCADE,
+                label       TEXT    NOT NULL,
+                url         TEXT    NOT NULL,
+                created_at  TEXT    NOT NULL
+            );
+            INSERT INTO pull_requests (id, metadata_id, label, url, created_at)
+            SELECT id, metadata_id, label, url, created_at
+            FROM pull_requests_old;
+            DROP TABLE pull_requests_old;
+        `);
+        db.exec('PRAGMA foreign_keys = ON');
+        console.log('  [migrate] foreign key de pull_requests reparada para metadatas');
+    }
+})();
 
 const selectDuplicateMetadataGroups = db.prepare(`
     SELECT
@@ -98,6 +123,26 @@ const moveMetadataPullRequests = db.prepare(`
 
 const deleteMetadataById = db.prepare('DELETE FROM metadatas WHERE id = ?');
 
+const selectDuplicatePullRequestGroups = db.prepare(`
+    SELECT
+        metadata_id,
+        LOWER(TRIM(url)) AS normalized_url,
+        COUNT(*) AS total
+    FROM pull_requests
+    GROUP BY metadata_id, LOWER(TRIM(url))
+    HAVING COUNT(*) > 1
+`);
+
+const selectDuplicatePullRequests = db.prepare(`
+    SELECT id
+    FROM pull_requests
+    WHERE metadata_id = ?
+      AND LOWER(TRIM(url)) = ?
+    ORDER BY datetime(created_at) DESC, id DESC
+`);
+
+const deletePullRequestById = db.prepare('DELETE FROM pull_requests WHERE id = ?');
+
 function consolidateDuplicateMetadatas() {
     const duplicateGroups = selectDuplicateMetadataGroups.all();
     let removedCount = 0;
@@ -127,12 +172,86 @@ function consolidateDuplicateMetadatas() {
     }
 }
 
+function consolidateDuplicatePullRequests() {
+    const duplicateGroups = selectDuplicatePullRequestGroups.all();
+    let removedCount = 0;
+
+    duplicateGroups.forEach(group => {
+        const rows = selectDuplicatePullRequests.all(group.metadata_id, group.normalized_url);
+        if (rows.length < 2) {
+            return;
+        }
+
+        rows.slice(1).forEach(duplicate => {
+            deletePullRequestById.run(duplicate.id);
+            removedCount += 1;
+        });
+    });
+
+    if (removedCount > 0) {
+        console.log(`  [migrate] ${removedCount} PR(s) duplicado(s) consolidado(s)`);
+    }
+}
+
 consolidateDuplicateMetadatas();
+consolidateDuplicatePullRequests();
 
 db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_metadatas_unique_context
   ON metadatas (front_id, sprint_id, metadata_type_id, metadata_name COLLATE NOCASE);
 `);
+
+db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_pull_requests_unique_metadata_url
+    ON pull_requests (metadata_id, url COLLATE NOCASE);
+`);
+
+db.exec(`
+    CREATE TABLE IF NOT EXISTS repos (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name       TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+        repo_path  TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+        created_at TEXT    NOT NULL
+    );
+`);
+
+// Migra sprint_id de NOT NULL para NULL se necessario
+(function migrateSprintNullable() {
+        const cols = db.prepare('PRAGMA table_info(metadatas)').all();
+        const sprintCol = cols.find(c => c.name === 'sprint_id');
+        if (sprintCol && sprintCol.notnull === 1) {
+        db.exec('PRAGMA foreign_keys = OFF');
+                db.exec(`
+                        ALTER TABLE metadatas RENAME TO metadatas_old;
+                        CREATE TABLE metadatas (
+                                id               TEXT    PRIMARY KEY,
+                                front_id         INTEGER NOT NULL REFERENCES fronts(id),
+                                sprint_id        INTEGER REFERENCES sprints(id),
+                                metadata_name    TEXT    NOT NULL,
+                                metadata_type_id INTEGER NOT NULL REFERENCES metadata_types(id),
+                                change_type      TEXT    NOT NULL,
+                                ticket           TEXT,
+                                description      TEXT    NOT NULL,
+                                created_at       TEXT    NOT NULL
+                        );
+                        INSERT INTO metadatas SELECT * FROM metadatas_old;
+            ALTER TABLE pull_requests RENAME TO pull_requests_old;
+            CREATE TABLE pull_requests (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                metadata_id TEXT    NOT NULL REFERENCES metadatas(id) ON DELETE CASCADE,
+                label       TEXT    NOT NULL,
+                url         TEXT    NOT NULL,
+                created_at  TEXT    NOT NULL
+            );
+            INSERT INTO pull_requests (id, metadata_id, label, url, created_at)
+            SELECT id, metadata_id, label, url, created_at FROM pull_requests_old;
+            DROP TABLE pull_requests_old;
+                        DROP TABLE metadatas_old;
+                `);
+        db.exec('PRAGMA foreign_keys = ON');
+                console.log('  [migrate] sprint_id agora e opcional em metadatas');
+        }
+})();
 
 const DEFAULT_TYPES = [
     'ApexClass', 'ApexTrigger', 'Flow', 'Lightning Web Component',
@@ -142,6 +261,12 @@ const stmtInsertType = db.prepare('INSERT OR IGNORE INTO metadata_types (name) V
 DEFAULT_TYPES.forEach(name => stmtInsertType.run(name));
 
 const VALID_CHANGE_TYPES = new Set(['Criacao', 'Alteracao', 'Correcao', 'Remocao']);
+
+const selectFrontById = db.prepare('SELECT id FROM fronts WHERE id = ?');
+const selectSprintById = db.prepare('SELECT id FROM sprints WHERE id = ?');
+const selectSprintByIdAndFront = db.prepare('SELECT id FROM sprints WHERE id = ? AND front_id = ?');
+const selectMetadataTypeById = db.prepare('SELECT id FROM metadata_types WHERE id = ?');
+const selectMetadataById = db.prepare('SELECT id FROM metadatas WHERE id = ?');
 
 const METADATA_TYPE_ALIAS = {
     apexclass: 'ApexClass',
@@ -210,6 +335,150 @@ function stripKnownSuffixes(filename) {
         .replace(/\.(cls|trigger|page|component|app|evt|cmp|resource|object|flow|permissionset|profile|xml|js|ts|html|css)$/i, '');
 }
 
+function parsePositiveInt(value) {
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < 1) return null;
+    return parsed;
+}
+
+function normalizeText(value) {
+    return String(value ?? '').trim();
+}
+
+function parseOptionalBoolean(value) {
+    if (value == null || value === '') return null;
+    const normalized = normalizeText(value).toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+    return undefined;
+}
+
+function buildExportFileName(extension) {
+    const now = new Date();
+    const pad = value => String(value).padStart(2, '0');
+    return (
+        'release_export_' +
+        String(now.getFullYear()) +
+        pad(now.getMonth() + 1) +
+        pad(now.getDate()) +
+        '_' +
+        pad(now.getHours()) +
+        pad(now.getMinutes()) +
+        pad(now.getSeconds()) +
+        '.' + extension
+    );
+}
+
+function escapeCsvCell(value) {
+    if (value == null) return '';
+    const normalized = String(value).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (/[",\n]/.test(normalized)) {
+        return '"' + normalized.replace(/"/g, '""') + '"';
+    }
+    return normalized;
+}
+
+function sanitizeMarkdownCell(value) {
+    return String(value ?? '')
+        .replace(/\r\n|\r|\n/g, ' ')
+        .replace(/\|/g, '\\|')
+        .trim();
+}
+
+function truncateText(value, maxLength) {
+    const text = String(value ?? '');
+    if (text.length <= maxLength) return text;
+    return text.slice(0, maxLength) + '...';
+}
+
+function formatExportScope(filters) {
+    const parts = [];
+    if (filters.front_id) parts.push('front_id=' + String(filters.front_id));
+    if (filters.sprint_id) parts.push('sprint_id=' + String(filters.sprint_id));
+    if (filters.metadata_type_id) parts.push('metadata_type_id=' + String(filters.metadata_type_id));
+    if (filters.change_type) parts.push('change_type=' + String(filters.change_type));
+    if (filters.has_pr === true) parts.push('has_pr=true');
+    if (filters.has_pr === false) parts.push('has_pr=false');
+    if (filters.q) parts.push('q=' + String(filters.q));
+    return parts.length > 0 ? parts.join(' | ') : 'sem filtros';
+}
+
+function buildMarkdownExport(items, payload, includePrDetails) {
+    const lines = [];
+    lines.push('# Release Notes');
+    lines.push('');
+    lines.push('Gerado em: ' + payload.exported_at);
+    lines.push('Escopo: ' + formatExportScope(payload.filters));
+    lines.push('Total de itens: ' + String(payload.total_items));
+    lines.push('');
+
+    if (!items.length) {
+        lines.push('Sem itens para os filtros selecionados.');
+        return lines.join('\n');
+    }
+
+    let currentFront = null;
+    let currentSprint = null;
+    let currentType = null;
+
+    items.forEach(item => {
+        const front = String(item.front || 'Sem frente');
+        const sprint = String(item.sprint || 'Sem sprint');
+        const metadataType = String(item.metadata_type || 'Sem tipo');
+
+        if (front !== currentFront) {
+            currentFront = front;
+            currentSprint = null;
+            currentType = null;
+            lines.push('## Frente: ' + sanitizeMarkdownCell(front));
+            lines.push('');
+        }
+
+        if (sprint !== currentSprint) {
+            currentSprint = sprint;
+            currentType = null;
+            lines.push('### Sprint: ' + sanitizeMarkdownCell(sprint));
+            lines.push('');
+        }
+
+        if (metadataType !== currentType) {
+            currentType = metadataType;
+            lines.push('#### ' + sanitizeMarkdownCell(metadataType));
+            lines.push('');
+            lines.push('| Metadata | Ticket | Descricao | Tipo de Mudanca | PRs |');
+            lines.push('|----------|--------|-----------|-----------------|-----|');
+        }
+
+        const prs = Array.isArray(item.prs) ? item.prs : [];
+        let prsCell = '-';
+        if (prs.length > 0) {
+            if (includePrDetails) {
+                prsCell = prs.map(pr => {
+                    const rawLabel = String(pr?.label || 'PR');
+                    const safeLabel = sanitizeMarkdownCell(rawLabel)
+                        .replace(/\[/g, '\\[')
+                        .replace(/\]/g, '\\]');
+                    const url = String(pr?.url || '').trim();
+                    if (url) return '[' + safeLabel + '](' + url + ')';
+                    return safeLabel;
+                }).join(', ');
+            } else {
+                prsCell = String(prs.length) + ' PR(s)';
+            }
+        }
+
+        const metadataName = sanitizeMarkdownCell(item.metadata_name || '');
+        const ticket = sanitizeMarkdownCell(item.ticket || '-');
+        const description = sanitizeMarkdownCell(truncateText(item.description || '', 120) || '-');
+        const changeType = sanitizeMarkdownCell(item.change_type || '-');
+
+        lines.push('| ' + metadataName + ' | ' + ticket + ' | ' + description + ' | ' + changeType + ' | ' + prsCell + ' |');
+    });
+
+    lines.push('');
+    return lines.join('\n');
+}
+
 function extractMetadataType(filePath) {
     const cleanPath = String(filePath || '').replace(/\\/g, '/').toLowerCase();
     if (!cleanPath) return 'Metadata';
@@ -275,7 +544,38 @@ function extractMetadataName(filePath) {
 }
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname)));
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ── Repos ─────────────────────────────────────────────────────────────────────
+app.get('/api/repos', (_req, res) => {
+    res.json(db.prepare('SELECT * FROM repos ORDER BY name COLLATE NOCASE').all());
+});
+
+app.post('/api/repos', (req, res) => {
+    const name = String(req.body?.name ?? '').trim();
+    const repoPath = String(req.body?.repo_path ?? '').trim().replace(/[\/\\]+$/, '');
+    if (!name || !repoPath) return res.status(400).json({ error: 'name e repo_path obrigatorios' });
+    if (!fs.existsSync(repoPath) || !fs.existsSync(path.join(repoPath, '.git'))) {
+        return res.status(400).json({ error: 'Caminho invalido ou nao contem repositorio git (.git)' });
+    }
+    const created_at = new Date().toISOString();
+    try {
+        db.prepare('INSERT INTO repos (name, repo_path, created_at) VALUES (?, ?, ?)').run(name, repoPath, created_at);
+    } catch (e) {
+        if (String(e.message).includes('UNIQUE')) {
+            return res.status(409).json({ error: 'Repositorio ja cadastrado (nome ou caminho duplicado)' });
+        }
+        return res.status(500).json({ error: e.message });
+    }
+    res.json(db.prepare('SELECT * FROM repos WHERE name = ? COLLATE NOCASE').get(name));
+});
+
+app.delete('/api/repos/:id', (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'id invalido' });
+    db.prepare('DELETE FROM repos WHERE id = ?').run(id);
+    res.json({ ok: true });
+});
 
 // ── Fronts ───────────────────────────────────────────────────────────────────
 app.get('/api/fronts', (_req, res) => {
@@ -373,7 +673,7 @@ const METADATA_SELECT = `
            ) AS prs_json
     FROM metadatas m
     JOIN fronts f      ON f.id  = m.front_id
-    JOIN sprints s     ON s.id  = m.sprint_id
+    LEFT JOIN sprints s     ON s.id  = m.sprint_id
     JOIN metadata_types mt ON mt.id = m.metadata_type_id
 `;
 
@@ -393,6 +693,44 @@ const selectMetadataByUniqueContext = db.prepare(`
       AND metadata_name = ? COLLATE NOCASE
 `);
 
+const selectMetadataByContextNullableSprint = db.prepare(`
+    SELECT id
+    FROM metadatas
+    WHERE front_id = ?
+      AND (sprint_id IS ? OR (sprint_id IS NULL AND ? IS NULL))
+      AND metadata_type_id = ?
+      AND metadata_name = ? COLLATE NOCASE
+`);
+
+const insertMetadata = db.prepare(`
+    INSERT INTO metadatas (id, front_id, sprint_id, metadata_name, metadata_type_id, change_type, ticket, description, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+
+const selectPullRequestByMetadataAndUrl = db.prepare(`
+    SELECT id
+    FROM pull_requests
+    WHERE metadata_id = ?
+      AND url = ? COLLATE NOCASE
+`);
+
+const insertPullRequest = db.prepare(
+    'INSERT INTO pull_requests (metadata_id, label, url, created_at) VALUES (?, ?, ?, ?)'
+);
+
+function parseAndValidatePrUrl(rawUrl) {
+    let parsedUrl;
+    try {
+        parsedUrl = new URL(normalizeText(rawUrl));
+    } catch {
+        return { error: 'url invalida' };
+    }
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+        return { error: 'url deve usar http ou https' };
+    }
+    return { value: parsedUrl.toString() };
+}
+
 app.get('/api/metadatas', (req, res) => {
     const conditions = ['1=1'];
     const params = [];
@@ -408,19 +746,232 @@ app.get('/api/metadatas', (req, res) => {
     res.json(parsePrs(rows));
 });
 
+app.get('/api/exports', (req, res) => {
+    const format = normalizeText(req.query.format).toLowerCase();
+    if (!format) {
+        return res.status(400).json({ error: 'format obrigatorio (json, csv ou md)' });
+    }
+    if (!['json', 'csv', 'md'].includes(format)) {
+        return res.status(400).json({ error: 'Formato invalido. Use format=json, format=csv ou format=md' });
+    }
+
+    const rawFrontId = req.query.front_id;
+    const rawSprintId = req.query.sprint_id;
+    const rawMetadataTypeId = req.query.metadata_type_id;
+    const rawChangeType = normalizeText(req.query.change_type);
+    const rawSearch = normalizeText(req.query.q);
+
+    const hasFrontFilter = rawFrontId != null && rawFrontId !== '';
+    const hasSprintFilter = rawSprintId != null && rawSprintId !== '';
+    const hasMetadataTypeFilter = rawMetadataTypeId != null && rawMetadataTypeId !== '';
+
+    const frontId = hasFrontFilter ? parsePositiveInt(rawFrontId) : null;
+    const sprintId = hasSprintFilter ? parsePositiveInt(rawSprintId) : null;
+    const metadataTypeId = hasMetadataTypeFilter ? parsePositiveInt(rawMetadataTypeId) : null;
+
+    if (hasFrontFilter && !frontId) {
+        return res.status(400).json({ error: 'front_id invalido' });
+    }
+    if (hasSprintFilter && !sprintId) {
+        return res.status(400).json({ error: 'sprint_id invalido' });
+    }
+    if (hasMetadataTypeFilter && !metadataTypeId) {
+        return res.status(400).json({ error: 'metadata_type_id invalido' });
+    }
+
+    if (frontId && !selectFrontById.get(frontId)) {
+        return res.status(400).json({ error: 'front_id invalido' });
+    }
+    if (sprintId && !selectSprintById.get(sprintId)) {
+        return res.status(400).json({ error: 'sprint_id invalido' });
+    }
+    if (metadataTypeId && !selectMetadataTypeById.get(metadataTypeId)) {
+        return res.status(400).json({ error: 'metadata_type_id invalido' });
+    }
+    if (frontId && sprintId && !selectSprintByIdAndFront.get(sprintId, frontId)) {
+        return res.status(400).json({ error: 'sprint_id invalido para a frente informada' });
+    }
+
+    if (rawChangeType && !VALID_CHANGE_TYPES.has(rawChangeType)) {
+        return res.status(400).json({ error: 'change_type invalido' });
+    }
+
+    const hasPr = parseOptionalBoolean(req.query.has_pr);
+    if (hasPr === undefined) {
+        return res.status(400).json({ error: 'has_pr invalido (use true ou false)' });
+    }
+
+    const includePrDetails = parseOptionalBoolean(req.query.include_pr_details);
+    if (includePrDetails === undefined) {
+        return res.status(400).json({ error: 'include_pr_details invalido (use true ou false)' });
+    }
+
+    const conditions = ['1=1'];
+    const params = [];
+
+    if (frontId) {
+        conditions.push('m.front_id = ?');
+        params.push(frontId);
+    }
+    if (sprintId) {
+        conditions.push('m.sprint_id = ?');
+        params.push(sprintId);
+    }
+    if (metadataTypeId) {
+        conditions.push('m.metadata_type_id = ?');
+        params.push(metadataTypeId);
+    }
+    if (rawChangeType) {
+        conditions.push('m.change_type = ?');
+        params.push(rawChangeType);
+    }
+    if (rawSearch) {
+        conditions.push('(m.metadata_name LIKE ? OR m.ticket LIKE ? OR m.description LIKE ?)');
+        const like = '%' + rawSearch.replace(/[%_\\]/g, c => '\\' + c) + '%';
+        params.push(like, like, like);
+    }
+    if (hasPr === true) {
+        conditions.push('EXISTS (SELECT 1 FROM pull_requests p2 WHERE p2.metadata_id = m.id)');
+    } else if (hasPr === false) {
+        conditions.push('NOT EXISTS (SELECT 1 FROM pull_requests p2 WHERE p2.metadata_id = m.id)');
+    }
+
+    const rows = db.prepare(
+        METADATA_SELECT +
+        ' WHERE ' + conditions.join(' AND ') +
+        ' ORDER BY f.name COLLATE NOCASE ASC, ' +
+        'CASE WHEN s.name IS NULL THEN 1 ELSE 0 END ASC, ' +
+        's.name COLLATE NOCASE ASC, ' +
+        'mt.name COLLATE NOCASE ASC, ' +
+        'm.metadata_name COLLATE NOCASE ASC, ' +
+        'm.created_at DESC'
+    ).all(...params);
+
+    const parsedItems = parsePrs(rows);
+    const shouldIncludePrDetails = includePrDetails !== false;
+    const items = shouldIncludePrDetails
+        ? parsedItems
+        : parsedItems.map(item => {
+            const prCount = Array.isArray(item.prs) ? item.prs.length : 0;
+            const { prs, ...rest } = item;
+            return { ...rest, pr_count: prCount };
+        });
+
+    const payload = {
+        exported_at: new Date().toISOString(),
+        filters: {
+            format,
+            front_id: frontId,
+            sprint_id: sprintId,
+            metadata_type_id: metadataTypeId,
+            q: rawSearch || null,
+            change_type: rawChangeType || null,
+            has_pr: hasPr,
+            include_pr_details: shouldIncludePrDetails
+        },
+        total_items: items.length,
+        items
+    };
+
+    if (format === 'json') {
+        const fileName = buildExportFileName('json');
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Content-Disposition', 'attachment; filename=' + fileName);
+        return res.status(200).json(payload);
+    }
+
+    const csvHeaders = [
+        'front',
+        'sprint',
+        'metadata_type',
+        'metadata_name',
+        'change_type',
+        'ticket',
+        'description',
+        'pr_count',
+        'pr_labels',
+        'pr_urls',
+        'created_at'
+    ];
+
+    const csvLines = [csvHeaders.join(',')];
+    const includePrCols = includePrDetails !== false;
+    parsedItems.forEach(item => {
+        const prs = Array.isArray(item.prs) ? item.prs : [];
+        const prCount = prs.length;
+        const prLabels = includePrCols ? prs.map(pr => normalizeText(pr.label)).filter(Boolean).join(' | ') : '';
+        const prUrls = includePrCols ? prs.map(pr => normalizeText(pr.url)).filter(Boolean).join(' | ') : '';
+
+        const row = [
+            item.front || '',
+            item.sprint || '',
+            item.metadata_type || '',
+            item.metadata_name || '',
+            item.change_type || '',
+            item.ticket || '',
+            item.description || '',
+            String(prCount),
+            prLabels,
+            prUrls,
+            item.created_at || ''
+        ].map(escapeCsvCell);
+
+        csvLines.push(row.join(','));
+    });
+
+    const csvContent = csvLines.join('\n');
+    if (format === 'csv') {
+        const fileName = buildExportFileName('csv');
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', 'attachment; filename=' + fileName);
+        return res.status(200).send(csvContent);
+    }
+
+    const markdownContent = buildMarkdownExport(parsedItems, payload, includePrDetails !== false);
+    const fileName = buildExportFileName('md');
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename=' + fileName);
+    return res.status(200).send(markdownContent);
+});
+
 app.post('/api/metadatas', (req, res) => {
     const { front_id, sprint_id, metadata_name, metadata_type_id, change_type, ticket, description } = req.body ?? {};
-    if (!front_id || !sprint_id || !metadata_name || !metadata_type_id || !change_type || !description) {
+    const frontId = parsePositiveInt(front_id);
+    const sprintIdValue = sprint_id == null || sprint_id === '' ? null : parsePositiveInt(sprint_id);
+    const metadataTypeId = parsePositiveInt(metadata_type_id);
+    const normalizedMetadataName = normalizeText(metadata_name);
+    const normalizedDescription = normalizeText(description);
+    const normalizedTicket = normalizeText(ticket) || null;
+
+    if (!frontId || !normalizedMetadataName || !metadataTypeId || !change_type || !normalizedDescription) {
         return res.status(400).json({ error: 'campos obrigatorios ausentes' });
+    }
+    if (normalizedMetadataName.length > 255) {
+        return res.status(400).json({ error: 'metadata_name excede 255 caracteres' });
+    }
+    if (normalizedDescription.length > 4000) {
+        return res.status(400).json({ error: 'description excede 4000 caracteres' });
+    }
+    if (normalizedTicket && normalizedTicket.length > 255) {
+        return res.status(400).json({ error: 'ticket excede 255 caracteres' });
     }
     if (!VALID_CHANGE_TYPES.has(change_type)) {
         return res.status(400).json({ error: 'change_type invalido' });
     }
-    const normalizedMetadataName = String(metadata_name).trim();
-    const existingMetadata = selectMetadataByUniqueContext.get(
-        Number(front_id),
-        Number(sprint_id),
-        Number(metadata_type_id),
+    if (!selectFrontById.get(frontId)) {
+        return res.status(400).json({ error: 'front_id invalido' });
+    }
+    if (!selectMetadataTypeById.get(metadataTypeId)) {
+        return res.status(400).json({ error: 'metadata_type_id invalido' });
+    }
+    if (sprintIdValue && !selectSprintByIdAndFront.get(sprintIdValue, frontId)) {
+        return res.status(400).json({ error: 'sprint_id invalido para a frente informada' });
+    }
+    const existingMetadata = selectMetadataByContextNullableSprint.get(
+        frontId,
+        sprintIdValue,
+        sprintIdValue,
+        metadataTypeId,
         normalizedMetadataName
     );
     if (existingMetadata) {
@@ -432,19 +983,162 @@ app.post('/api/metadatas', (req, res) => {
     const id = 'meta-' + crypto.randomUUID();
     const created_at = new Date().toISOString();
     try {
-        db.prepare(`
-            INSERT INTO metadatas (id, front_id, sprint_id, metadata_name, metadata_type_id, change_type, ticket, description, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-            id, Number(front_id), Number(sprint_id),
-            normalizedMetadataName, Number(metadata_type_id),
-            change_type, ticket ? String(ticket).trim() : null,
-            String(description).trim(), created_at
+        insertMetadata.run(
+            id, frontId, sprintIdValue,
+            normalizedMetadataName, metadataTypeId,
+            change_type, normalizedTicket,
+            normalizedDescription, created_at
         );
         const rows = db.prepare(METADATA_SELECT + ' WHERE m.id = ?').all(id);
         res.json(parsePrs(rows)[0]);
     } catch (e) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/metadatas/bulk', (req, res) => {
+    const { front_id, sprint_id, ticket, description, metadata_items, prs } = req.body ?? {};
+
+    const frontId = parsePositiveInt(front_id);
+    const sprintIdValue = sprint_id == null || sprint_id === '' ? null : parsePositiveInt(sprint_id);
+    const normalizedDescription = normalizeText(description);
+    const normalizedTicket = normalizeText(ticket) || null;
+    const metadataItems = Array.isArray(metadata_items) ? metadata_items : [];
+    const prItems = Array.isArray(prs) ? prs : [];
+
+    if (!frontId || !normalizedDescription || metadataItems.length === 0) {
+        return res.status(400).json({ error: 'front_id, description e metadata_items sao obrigatorios' });
+    }
+    if (normalizedDescription.length > 4000) {
+        return res.status(400).json({ error: 'description excede 4000 caracteres' });
+    }
+    if (normalizedTicket && normalizedTicket.length > 255) {
+        return res.status(400).json({ error: 'ticket excede 255 caracteres' });
+    }
+    if (!selectFrontById.get(frontId)) {
+        return res.status(400).json({ error: 'front_id invalido' });
+    }
+    if (sprintIdValue && !selectSprintByIdAndFront.get(sprintIdValue, frontId)) {
+        return res.status(400).json({ error: 'sprint_id invalido para a frente informada' });
+    }
+
+    const uniqueMetadata = new Map();
+    for (let index = 0; index < metadataItems.length; index += 1) {
+        const row = metadataItems[index] || {};
+        const metadataName = normalizeText(row.metadata_name);
+        const metadataTypeId = parsePositiveInt(row.metadata_type_id);
+        const changeType = normalizeText(row.change_type);
+
+        if (!metadataName || !metadataTypeId || !changeType) {
+            return res.status(400).json({ error: `metadata_items[${index}] invalido` });
+        }
+        if (metadataName.length > 255) {
+            return res.status(400).json({ error: `metadata_items[${index}].metadata_name excede 255 caracteres` });
+        }
+        if (!VALID_CHANGE_TYPES.has(changeType)) {
+            return res.status(400).json({ error: `metadata_items[${index}].change_type invalido` });
+        }
+        if (!selectMetadataTypeById.get(metadataTypeId)) {
+            return res.status(400).json({ error: `metadata_items[${index}].metadata_type_id invalido` });
+        }
+
+        const key = `${metadataTypeId}|${metadataName.toLowerCase()}`;
+        if (!uniqueMetadata.has(key)) {
+            uniqueMetadata.set(key, {
+                metadata_name: metadataName,
+                metadata_type_id: metadataTypeId,
+                change_type: changeType
+            });
+        }
+    }
+
+    const uniquePrs = new Map();
+    for (let index = 0; index < prItems.length; index += 1) {
+        const row = prItems[index] || {};
+        const label = normalizeText(row.label);
+        const rawUrl = normalizeText(row.url);
+
+        if (!label && !rawUrl) {
+            continue;
+        }
+        if (!label || !rawUrl) {
+            return res.status(400).json({ error: `prs[${index}] deve conter label e url` });
+        }
+        if (label.length > 255) {
+            return res.status(400).json({ error: `prs[${index}].label excede 255 caracteres` });
+        }
+
+        const parsedUrl = parseAndValidatePrUrl(rawUrl);
+        if (parsedUrl.error) {
+            return res.status(400).json({ error: `prs[${index}].${parsedUrl.error}` });
+        }
+
+        const prKey = `${label.toLowerCase()}|${parsedUrl.value.toLowerCase()}`;
+        if (!uniquePrs.has(prKey)) {
+            uniquePrs.set(prKey, { label, url: parsedUrl.value });
+        }
+    }
+
+    let createdCount = 0;
+    let reusedCount = 0;
+    let prCreatedCount = 0;
+    const totalMetadata = uniqueMetadata.size;
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+        for (const metadataRow of uniqueMetadata.values()) {
+            let metadata = selectMetadataByContextNullableSprint.get(
+                frontId,
+                sprintIdValue,
+                sprintIdValue,
+                metadataRow.metadata_type_id,
+                metadataRow.metadata_name
+            );
+
+            if (!metadata) {
+                const metadataId = 'meta-' + crypto.randomUUID();
+                insertMetadata.run(
+                    metadataId,
+                    frontId,
+                    sprintIdValue,
+                    metadataRow.metadata_name,
+                    metadataRow.metadata_type_id,
+                    metadataRow.change_type,
+                    normalizedTicket,
+                    normalizedDescription,
+                    new Date().toISOString()
+                );
+                metadata = { id: metadataId };
+                createdCount += 1;
+            } else {
+                reusedCount += 1;
+            }
+
+            for (const prDef of uniquePrs.values()) {
+                const existingPr = selectPullRequestByMetadataAndUrl.get(metadata.id, prDef.url);
+                if (existingPr) {
+                    continue;
+                }
+                insertPullRequest.run(metadata.id, prDef.label, prDef.url, new Date().toISOString());
+                prCreatedCount += 1;
+            }
+        }
+
+        db.exec('COMMIT');
+        return res.json({
+            ok: true,
+            total_metadata: totalMetadata,
+            created_count: createdCount,
+            reused_count: reusedCount,
+            pr_created_count: prCreatedCount
+        });
+    } catch (e) {
+        db.exec('ROLLBACK');
+        const msg = String(e?.message || '');
+        if (msg.includes('UNIQUE constraint failed')) {
+            return res.status(409).json({ error: 'Conflito de unicidade ao processar lote. Revise metadados ou PRs duplicados.' });
+        }
+        return res.status(500).json({ error: e?.message || 'Erro ao processar lote transacional' });
     }
 });
 
@@ -454,11 +1148,22 @@ app.put('/api/metadatas/:id', (req, res) => {
         return res.status(400).json({ error: 'id invalido' });
     }
     const { change_type, ticket, description } = req.body ?? {};
-    if (!change_type || !description) {
+    const normalizedDescription = normalizeText(description);
+    const normalizedTicket = normalizeText(ticket) || null;
+    if (!change_type || !normalizedDescription) {
         return res.status(400).json({ error: 'change_type e description sao obrigatorios' });
+    }
+    if (normalizedDescription.length > 4000) {
+        return res.status(400).json({ error: 'description excede 4000 caracteres' });
+    }
+    if (normalizedTicket && normalizedTicket.length > 255) {
+        return res.status(400).json({ error: 'ticket excede 255 caracteres' });
     }
     if (!VALID_CHANGE_TYPES.has(change_type)) {
         return res.status(400).json({ error: 'change_type invalido' });
+    }
+    if (!selectMetadataById.get(id)) {
+        return res.status(404).json({ error: 'metadata nao encontrado' });
     }
     try {
         db.prepare(`
@@ -467,8 +1172,8 @@ app.put('/api/metadatas/:id', (req, res) => {
             WHERE id = ?
         `).run(
             change_type,
-            ticket ? String(ticket).trim() : null,
-            String(description).trim(),
+            normalizedTicket,
+            normalizedDescription,
             id
         );
         const rows = db.prepare(METADATA_SELECT + ' WHERE m.id = ?').all(id);
@@ -490,15 +1195,34 @@ app.delete('/api/metadatas/:id', (req, res) => {
 // ── Pull Requests ─────────────────────────────────────────────────────────────
 app.post('/api/metadatas/:id/prs', (req, res) => {
     const metadataId = String(req.params.id);
-    const label = String(req.body?.label ?? '').trim();
-    const url   = String(req.body?.url   ?? '').trim();
+    const label = normalizeText(req.body?.label);
+    const url = normalizeText(req.body?.url);
+    if (!/^meta-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(metadataId)) {
+        return res.status(400).json({ error: 'metadata_id invalido' });
+    }
+    if (!selectMetadataById.get(metadataId)) {
+        return res.status(404).json({ error: 'metadata nao encontrado' });
+    }
     if (!label || !url) return res.status(400).json({ error: 'label e url obrigatorios' });
-    try { new URL(url); } catch { return res.status(400).json({ error: 'url invalida' }); }
+    if (label.length > 255) return res.status(400).json({ error: 'label excede 255 caracteres' });
+    const parsedUrl = parseAndValidatePrUrl(url);
+    if (parsedUrl.error) {
+        return res.status(400).json({ error: parsedUrl.error });
+    }
+    const normalizedUrl = parsedUrl.value;
     const created_at = new Date().toISOString();
-    const result = db.prepare(
-        'INSERT INTO pull_requests (metadata_id, label, url, created_at) VALUES (?, ?, ?, ?)'
-    ).run(metadataId, label, url, created_at);
-    res.json(db.prepare('SELECT * FROM pull_requests WHERE id = ?').get(result.lastInsertRowid));
+    try {
+        const result = db.prepare(
+            'INSERT INTO pull_requests (metadata_id, label, url, created_at) VALUES (?, ?, ?, ?)'
+        ).run(metadataId, label, normalizedUrl, created_at);
+        res.json(db.prepare('SELECT * FROM pull_requests WHERE id = ?').get(result.lastInsertRowid));
+    } catch (e) {
+        const msg = String(e?.message || '');
+        if (msg.includes('UNIQUE constraint failed')) {
+            return res.status(409).json({ error: 'Este PR ja esta vinculado ao metadata informado' });
+        }
+        return res.status(500).json({ error: e.message });
+    }
 });
 
 app.delete('/api/prs/:id', (req, res) => {
@@ -506,6 +1230,96 @@ app.delete('/api/prs/:id', (req, res) => {
     if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'id invalido' });
     db.prepare('DELETE FROM pull_requests WHERE id = ?').run(id);
     res.json({ ok: true });
+});
+
+// ── Scan commits by author email ──────────────────────────────────────────────
+app.post('/api/scan-commits', async (req, res) => {
+    try {
+        const email = String(req.body?.email || '').trim().toLowerCase();
+        if (!email) {
+            return res.status(400).json({ error: 'email obrigatorio' });
+        }
+
+        const repoPath = assertValidRepoPath(String(req.body?.repo_path || '').trim());
+
+        const args = [
+            'log', '--all', '--name-only',
+            `--author=${email}`,
+            '--pretty=format:__COMMIT__%H%x09%aI%x09%an%x09%ae'
+        ];
+
+        const since = String(req.body?.since || '').trim();
+        const until = String(req.body?.until || '').trim();
+        const branch = String(req.body?.branch || '').trim();
+
+        if (since) args.push(`--since=${since}`);
+        if (until) args.push(`--until=${until}`);
+        if (branch) {
+            if (branch.startsWith('-') || !/^[a-zA-Z0-9/_.\-@]+$/.test(branch)) {
+                return res.status(400).json({ error: 'branch invalido' });
+            }
+            args.push(branch);
+        }
+
+        const { stdout } = await runGit(repoPath, args);
+
+        const rows = String(stdout || '').split('\n');
+        const commits = [];
+        let current = null;
+
+        for (const line of rows) {
+            if (line.startsWith('__COMMIT__')) {
+                if (current) commits.push(current);
+                const parts = line.slice(10).split('\t');
+                current = {
+                    hash: parts[0] || '',
+                    authored_at: parts[1] || '',
+                    author_name: parts[2] || '',
+                    author_email: parts[3] || '',
+                    files: []
+                };
+                continue;
+            }
+            if (current && line.trim()) {
+                current.files.push(line.trim());
+            }
+        }
+        if (current) commits.push(current);
+
+        // Exact email match (git --author is a regex, this ensures precision)
+        const filtered = commits.filter(c => c.author_email.toLowerCase() === email);
+
+        const result = filtered.map(commit => {
+            const metadataItems = Array.from(new Map(
+                commit.files
+                    .map(extractMetadataName)
+                    .filter(item => item.name)
+                    .map(item => [String(item.type).toLowerCase() + '::' + String(item.name).toLowerCase(), item])
+            ).values());
+
+            return {
+                hash: commit.hash,
+                authored_at: commit.authored_at,
+                author_name: commit.author_name,
+                author_email: commit.author_email,
+                metadata_items: metadataItems
+            };
+        }).filter(c => c.metadata_items.length > 0);
+
+        res.json({ commits: result, total: result.length });
+    } catch (error) {
+        if (error && Number.isInteger(error.status)) {
+            return res.status(error.status).json({ error: error.message });
+        }
+        if (error && error.code === 'ENOENT') {
+            return res.status(500).json({ error: 'git nao encontrado no sistema' });
+        }
+        const stderr = String(error?.stderr || '').trim();
+        if (stderr) {
+            return res.status(500).json({ error: stderr });
+        }
+        res.status(500).json({ error: error?.message || 'Erro ao ler commits' });
+    }
 });
 
 app.listen(PORT, '127.0.0.1', () => {

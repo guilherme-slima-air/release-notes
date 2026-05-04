@@ -23,6 +23,7 @@
         <section class="tab-switcher" role="tablist" aria-label="Modulos">
             <button id="tab-btn-metadata" class="tab-switch is-active" type="button" role="tab" aria-selected="true">Incluir metadados</button>
             <button id="tab-btn-release" class="tab-switch" type="button" role="tab" aria-selected="false">Gerar release notes</button>
+            <button id="tab-btn-commits" class="tab-switch" type="button" role="tab" aria-selected="false">Busca por commit</button>
         </section>
 
         <section id="tab-pane-metadata" class="tab-pane">
@@ -47,7 +48,7 @@
                         </div>
 
                         <div class="field">
-                            <label for="f-sprint-select">Sprint *</label>
+                            <label for="f-sprint-select">Sprint (opcional)</label>
                             <div class="lookup-wrap">
                                 <select id="f-sprint-select" disabled></select>
                                 <button type="button" class="btn-lookup-add" id="btn-add-sprint" title="Nova sprint" disabled>+</button>
@@ -62,7 +63,12 @@
                         <div class="field field-full">
                             <span>Importar metadados por commit</span>
                             <div class="commit-import-grid">
-                                <input id="f-repo-path" type="text" placeholder="Caminho local do repositorio git (ex.: C:/repos/salesforce)">
+                                <div class="repo-path-wrap">
+                                    <input id="f-repo-path" type="text" placeholder="Caminho local do repositorio git (ex.: C:/repos/salesforce)">
+                                    <select id="f-repo-select" title="Usar repositorio salvo">
+                                        <option value="">Repo salvo...</option>
+                                    </select>
+                                </div>
                                 <input id="f-commit-hash" type="text" placeholder="Hash do commit (ex.: a1b2c3d4)">
                                 <button type="button" id="btn-load-commit" class="btn-secondary">Buscar no commit</button>
                             </div>
@@ -76,10 +82,10 @@
                             <button type="button" id="btn-bulk-add-metadata" class="btn-secondary btn-sm">+ Adicionar metadata</button>
                             <p class="field-hint">Cada linha define nome, tipo do metadata e tipo de mudanca usando o mesmo contexto e descricao.</p>
 
-                            <span>PRs do lote *</span>
+                            <span>PRs do lote (opcional)</span>
                             <div id="bulk-pr-rows" class="bulk-rows"></div>
                             <button type="button" id="btn-bulk-add-pr" class="btn-secondary btn-sm">+ Adicionar PR</button>
-                            <p class="field-hint">Informe label e link do PR para vincular em todos os metadatas do lote.</p>
+                            <p class="field-hint">Se informado, preencha label e link em cada PR para vincular nos metadatas do lote.</p>
                         </div>
 
                         <div class="field">
@@ -114,6 +120,29 @@
                         <button type="button" id="btn-clear-form" class="btn-secondary">Limpar</button>
                     </div>
                 </form>
+            </section>
+
+            <section class="panel repos-panel">
+                <div class="section-head">
+                    <h2>Repositorios salvos</h2>
+                </div>
+                <form id="repo-form" novalidate autocomplete="off" class="repo-form">
+                    <div class="form-grid">
+                        <label class="field">
+                            <span>Nome do repositorio *</span>
+                            <input id="f-repo-name" type="text" placeholder="Ex.: Salesforce Org">
+                        </label>
+                        <label class="field">
+                            <span>Caminho local *</span>
+                            <input id="f-repo-path-save" type="text" placeholder="C:/repos/salesforce">
+                        </label>
+                    </div>
+                    <div id="repo-form-error" class="form-error" hidden></div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn-primary">Salvar repositorio</button>
+                    </div>
+                </form>
+                <div id="repos-list" class="repos-list"></div>
             </section>
 
             <section class="panel list-panel">
@@ -194,10 +223,84 @@
                     <button type="button" id="btn-reset-filters" class="btn-secondary">Resetar filtros</button>
                     <button type="button" id="btn-generate" class="btn-primary">Gerar release note</button>
                     <button type="button" id="btn-copy-release" class="btn-secondary">Copiar release</button>
+                    <button type="button" id="btn-export-json" class="btn-secondary">Exportar JSON</button>
+                    <button type="button" id="btn-export-csv" class="btn-secondary">Exportar CSV</button>
+                    <button type="button" id="btn-export-md" class="btn-secondary">Exportar MD</button>
                 </div>
 
                 <p id="release-meta" class="release-meta">Sem dados para gerar release note.</p>
                 <textarea id="release-output" class="release-output" rows="14" readonly placeholder="Seu release note sera gerado aqui..."></textarea>
+            </section>
+        </section>
+
+        <section id="tab-pane-commits" class="tab-pane" hidden>
+            <section class="panel form-panel">
+                <div class="section-head">
+                    <h2>Buscar commits por email</h2>
+                </div>
+
+                <form id="scan-form" novalidate autocomplete="off">
+                    <div class="form-grid">
+                        <label class="field field-full">
+                            <span>Email do autor *</span>
+                            <input id="scan-email" type="email" required placeholder="Ex.: dev@company.com">
+                        </label>
+
+                        <label class="field field-full">
+                            <span>Caminho do repositorio *</span>
+                            <div class="repo-path-wrap">
+                                <input id="scan-repo-path" type="text" required placeholder="C:/repos/salesforce">
+                                <select id="scan-repo-select" title="Usar repositorio salvo">
+                                    <option value="">Repo salvo...</option>
+                                </select>
+                            </div>
+                        </label>
+
+                        <label class="field">
+                            <span>Data inicial (opcional)</span>
+                            <input id="scan-since" type="date">
+                        </label>
+
+                        <label class="field">
+                            <span>Data final (opcional)</span>
+                            <input id="scan-until" type="date">
+                        </label>
+
+                        <label class="field">
+                            <span>Branch (opcional)</span>
+                            <input id="scan-branch" type="text" placeholder="Ex.: main">
+                        </label>
+                    </div>
+
+                    <div id="scan-error" class="form-error" hidden></div>
+                    <div id="scan-info" class="form-info" hidden></div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn-primary" id="btn-scan">Buscar commits</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="panel list-panel" id="scan-results-section" hidden>
+                <div class="section-head">
+                    <h2>Commits encontrados</h2>
+                    <strong id="scan-count-label">0 commits</strong>
+                </div>
+
+                <div class="table-wrap">
+                    <table class="scan-results-table">
+                        <thead>
+                            <tr>
+                                <th>Hash</th>
+                                <th>Data</th>
+                                <th>Autor</th>
+                                <th>Metadados detectados</th>
+                                <th>Acao</th>
+                            </tr>
+                        </thead>
+                        <tbody id="scan-results-body"></tbody>
+                    </table>
+                </div>
             </section>
         </section>
 

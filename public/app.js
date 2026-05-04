@@ -58,21 +58,47 @@
     const state = {
         items: [],
         metadataTypes: [],
+        repos: [],
         filterFrontId: '',
         filterSprintId: '',
         filterTypeId: '',
         filterSearch: '',
         latestReleaseText: '',
         highlightedMetadataId: '',
-        activeTab: 'metadata'
+        activeTab: 'metadata',
+        scanResults: [],
+        lastScanRepoPath: ''
     };
 
     // ── DOM refs ─────────────────────────────────────────────────────────────
     const el = {
         tabBtnMetadata: document.getElementById('tab-btn-metadata'),
         tabBtnRelease: document.getElementById('tab-btn-release'),
+        tabBtnCommits: document.getElementById('tab-btn-commits'),
         tabPaneMetadata: document.getElementById('tab-pane-metadata'),
         tabPaneRelease: document.getElementById('tab-pane-release'),
+        tabPaneCommits: document.getElementById('tab-pane-commits'),
+        // Repos
+        repoForm: document.getElementById('repo-form'),
+        repoName: document.getElementById('f-repo-name'),
+        repoPathSave: document.getElementById('f-repo-path-save'),
+        repoFormError: document.getElementById('repo-form-error'),
+        reposList: document.getElementById('repos-list'),
+        fRepoSelect: document.getElementById('f-repo-select'),
+        scanRepoSelect: document.getElementById('scan-repo-select'),
+        // Scan form
+        scanForm: document.getElementById('scan-form'),
+        scanEmail: document.getElementById('scan-email'),
+        scanRepoPath: document.getElementById('scan-repo-path'),
+        scanSince: document.getElementById('scan-since'),
+        scanUntil: document.getElementById('scan-until'),
+        scanBranch: document.getElementById('scan-branch'),
+        scanError: document.getElementById('scan-error'),
+        scanInfo: document.getElementById('scan-info'),
+        btnScan: document.getElementById('btn-scan'),
+        scanResultsSection: document.getElementById('scan-results-section'),
+        scanCountLabel: document.getElementById('scan-count-label'),
+        scanResultsBody: document.getElementById('scan-results-body'),
         form: document.getElementById('metadata-form'),
         formError: document.getElementById('form-error'),
         // Form lookups — frente
@@ -135,6 +161,9 @@
         // Saida
         btnGenerate:    document.getElementById('btn-generate'),
         btnCopyRelease: document.getElementById('btn-copy-release'),
+        btnExportJson:  document.getElementById('btn-export-json'),
+        btnExportCsv:   document.getElementById('btn-export-csv'),
+        btnExportMd:    document.getElementById('btn-export-md'),
         releaseMeta:    document.getElementById('release-meta'),
         releaseOutput:  document.getElementById('release-output'),
         countLabel:     document.getElementById('count-label'),
@@ -215,17 +244,20 @@
 
     function setActiveTab(tabName) {
         state.activeTab = tabName;
-        const isMetadataTab = tabName === 'metadata';
 
-        el.tabPaneMetadata.hidden = !isMetadataTab;
-        el.tabPaneRelease.hidden = isMetadataTab;
+        el.tabPaneMetadata.hidden = tabName !== 'metadata';
+        el.tabPaneRelease.hidden = tabName !== 'release';
+        el.tabPaneCommits.hidden = tabName !== 'commits';
 
-        el.tabBtnMetadata.classList.toggle('is-active', isMetadataTab);
-        el.tabBtnRelease.classList.toggle('is-active', !isMetadataTab);
-        el.tabBtnMetadata.setAttribute('aria-selected', isMetadataTab ? 'true' : 'false');
-        el.tabBtnRelease.setAttribute('aria-selected', isMetadataTab ? 'false' : 'true');
+        el.tabBtnMetadata.classList.toggle('is-active', tabName === 'metadata');
+        el.tabBtnRelease.classList.toggle('is-active', tabName === 'release');
+        el.tabBtnCommits.classList.toggle('is-active', tabName === 'commits');
 
-        if (!isMetadataTab) {
+        el.tabBtnMetadata.setAttribute('aria-selected', tabName === 'metadata' ? 'true' : 'false');
+        el.tabBtnRelease.setAttribute('aria-selected', tabName === 'release' ? 'true' : 'false');
+        el.tabBtnCommits.setAttribute('aria-selected', tabName === 'commits' ? 'true' : 'false');
+
+        if (tabName === 'release') {
             generateRelease();
         }
     }
@@ -301,7 +333,7 @@
             el.bulkMetadataRows.appendChild(createBulkMetadataRow({}));
         }
         if (!el.bulkPrRows.querySelector('.bulk-row')) {
-            el.bulkPrRows.appendChild(createBulkPrRow('PR principal', ''));
+            el.bulkPrRows.appendChild(createBulkPrRow('', ''));
         }
     }
 
@@ -360,6 +392,60 @@
     }
 
     // ── Carregamento de dados ─────────────────────────────────────────────────
+    async function loadRepos() {
+        try {
+            state.repos = await api.get('/api/repos');
+        } catch (err) {
+            // Permite usar o app mesmo com backend antigo sem /api/repos.
+            if (err && err.status === 404) {
+                state.repos = [];
+                syncRepoSelects();
+                if (el.reposList) {
+                    el.reposList.innerHTML = '<p class="empty-state" style="margin-top:10px">Servidor sem suporte ao banco de repositorios. Reinicie o backend atualizado.</p>';
+                }
+                return;
+            }
+            throw err;
+        }
+        renderRepos();
+        syncRepoSelects();
+    }
+
+    function renderRepos() {
+        if (!el.reposList) return;
+        if (state.repos.length === 0) {
+            el.reposList.innerHTML = '<p class="empty-state" style="margin-top:10px">Nenhum repositorio salvo.</p>';
+            return;
+        }
+        el.reposList.innerHTML = state.repos.map(function(repo) {
+            return [
+                '<div class="repo-card">',
+                '  <div class="repo-card-info">',
+                '    <strong>' + escapeHtml(repo.name) + '</strong>',
+                '    <span>' + escapeHtml(repo.repo_path) + '</span>',
+                '  </div>',
+                '  <button type="button" class="btn-danger btn-sm" data-delete-repo="' + repo.id + '">Remover</button>',
+                '</div>'
+            ].join('');
+        }).join('');
+        el.reposList.querySelectorAll('[data-delete-repo]').forEach(function(btn) {
+            btn.addEventListener('click', async function() {
+                await api.del('/api/repos/' + btn.dataset.deleteRepo);
+                await loadRepos();
+            });
+        });
+    }
+
+    function syncRepoSelects() {
+        const opts = ['<option value="">Repo salvo...</option>'];
+        state.repos.forEach(function(repo) {
+            opts.push('<option value="' + escapeHtml(repo.repo_path) + '">' + escapeHtml(repo.name) + '</option>');
+        });
+        const html = opts.join('');
+        if (el.fRepoSelect) el.fRepoSelect.innerHTML = html;
+        if (el.scanRepoSelect) el.scanRepoSelect.innerHTML = html;
+    }
+
     async function loadFronts() {
         const fronts = await api.get('/api/fronts');
         fillSelect(el.frontSelect, fronts, 'Selecione uma frente');
@@ -503,6 +589,70 @@
             const sprints = new Set(state.items.map(function(i) { return i.sprint; })).size;
             el.releaseMeta.textContent = 'Escopo atual: ' + scopeText + ' • ' + state.items.length + ' itens em ' + fronts + ' frente(s) e ' + sprints + ' sprint(s).';
         }
+    }
+
+    function buildExportQuery(format) {
+        const params = new URLSearchParams();
+        params.set('format', format);
+        if (state.filterFrontId) params.set('front_id', state.filterFrontId);
+        if (state.filterSprintId) params.set('sprint_id', state.filterSprintId);
+        if (state.filterTypeId) params.set('metadata_type_id', state.filterTypeId);
+        if (state.filterSearch.trim()) params.set('q', state.filterSearch.trim());
+        return params.toString();
+    }
+
+    function triggerExport(format) {
+        const btnMap = { json: el.btnExportJson, csv: el.btnExportCsv, md: el.btnExportMd };
+        const btn = btnMap[format];
+        const originalText = btn ? btn.textContent : '';
+
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Exportando...';
+        }
+
+        const href = '/api/exports?' + buildExportQuery(format);
+
+        fetch(href)
+            .then(function(res) {
+                if (!res.ok) {
+                    return res.json().then(function(body) {
+                        throw new Error(body.error || ('Erro ' + res.status));
+                    });
+                }
+                const disposition = res.headers.get('Content-Disposition') || '';
+                const match = disposition.match(/filename=([^\s;]+)/);
+                const filename = match ? match[1] : ('release_export.' + format);
+                return res.blob().then(function(blob) {
+                    return { blob: blob, filename: filename };
+                });
+            })
+            .then(function(result) {
+                const url = URL.createObjectURL(result.blob);
+                const anchor = document.createElement('a');
+                anchor.href = url;
+                anchor.download = result.filename;
+                anchor.style.display = 'none';
+                document.body.appendChild(anchor);
+                anchor.click();
+                anchor.remove();
+                setTimeout(function() { URL.revokeObjectURL(url); }, 5000);
+
+                if (btn) {
+                    btn.textContent = 'Exportado!';
+                    setTimeout(function() {
+                        btn.textContent = originalText;
+                        btn.disabled = false;
+                    }, 1800);
+                }
+            })
+            .catch(function(err) {
+                if (btn) {
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                }
+                el.releaseMeta.textContent = '\u26a0\ufe0f Erro ao exportar ' + format.toUpperCase() + ': ' + err.message;
+            });
     }
 
     function parseBulkMetadataRows() {
@@ -691,95 +841,138 @@
             return;
         }
 
-        if (prDefs.length === 0) {
-            showError('Informe ao menos um PR no lote.', el.bulkPrRows);
+        const payload = await api.post('/api/metadatas/bulk', {
+            front_id: commonFields.frontId,
+            sprint_id: commonFields.sprintId,
+            ticket: commonFields.ticket || null,
+            description: commonFields.description,
+            metadata_items: metadataRows.map(function(row) {
+                return {
+                    metadata_name: row.name,
+                    metadata_type_id: row.typeId,
+                    change_type: row.changeType
+                };
+            }),
+            prs: prDefs
+        });
+
+        hideError();
+        showInfo(
+            'Lote processado: ' + String(payload.total_metadata || metadataRows.length) +
+            ' metadata(s), ' + String(payload.created_count || 0) +
+            ' novo(s), ' + String(payload.reused_count || 0) +
+            ' reaproveitado(s), ' + String(payload.pr_created_count || 0) +
+            ' vinculacao(oes) de PR criada(s).'
+        );
+        resetBulkRows();
+        await loadItems();
+    }
+
+    // ── Scan commits ──────────────────────────────────────────────────────────
+    async function scanCommits() {
+        el.scanError.hidden = true;
+        el.scanError.textContent = '';
+        el.scanInfo.hidden = true;
+        el.scanInfo.textContent = '';
+
+        const email = el.scanEmail.value.trim();
+        const repoPath = el.scanRepoPath.value.trim();
+        const since = el.scanSince.value ? el.scanSince.value + 'T00:00:00' : '';
+        const until = el.scanUntil.value ? el.scanUntil.value + 'T23:59:59' : '';
+        const branch = el.scanBranch.value.trim();
+
+        if (!email) {
+            el.scanError.hidden = false;
+            el.scanError.textContent = 'Informe o email do autor.';
+            el.scanEmail.focus();
+            return;
+        }
+        if (!repoPath) {
+            el.scanError.hidden = false;
+            el.scanError.textContent = 'Informe o caminho do repositorio.';
+            el.scanRepoPath.focus();
             return;
         }
 
-        const metadataCacheByType = new Map();
+        el.btnScan.disabled = true;
+        const prevText = el.btnScan.textContent;
+        el.btnScan.textContent = 'Buscando...';
+        el.scanInfo.hidden = false;
+        el.scanInfo.textContent = 'Consultando commits...';
 
-        async function getMetadataMapByType(typeId, forceReload) {
-            const cacheKey = String(typeId);
-            if (!forceReload && metadataCacheByType.has(cacheKey)) {
-                return metadataCacheByType.get(cacheKey);
+        try {
+            const payload = await api.post('/api/scan-commits', {
+                email,
+                repo_path: repoPath,
+                since: since || undefined,
+                until: until || undefined,
+                branch: branch || undefined
+            });
+
+            state.scanResults = payload.commits || [];
+            state.lastScanRepoPath = repoPath;
+            localStorage.setItem('release_notes_scan_repo_path', repoPath);
+
+            if (state.scanResults.length === 0) {
+                el.scanInfo.textContent = 'Nenhum commit com metadados identificaveis encontrado para este email.';
+            } else {
+                el.scanInfo.textContent = state.scanResults.length + ' commit(s) encontrado(s) com metadados Salesforce.';
             }
 
-            const contextParams = new URLSearchParams();
-            contextParams.set('front_id', String(commonFields.frontId));
-            contextParams.set('sprint_id', String(commonFields.sprintId));
-            contextParams.set('metadata_type_id', cacheKey);
+            renderScanResults();
+        } catch (e) {
+            el.scanError.hidden = false;
+            el.scanError.textContent = 'Erro ao buscar commits: ' + e.message;
+            el.scanInfo.hidden = true;
+        } finally {
+            el.btnScan.disabled = false;
+            el.btnScan.textContent = prevText;
+        }
+    }
 
-            const contextMetadatas = await api.get('/api/metadatas?' + contextParams.toString());
-            const metadataByName = new Map(contextMetadatas.map(function(item) {
-                return [normalizeCompare(item.metadata_name), item];
-            }));
-            metadataCacheByType.set(cacheKey, metadataByName);
-            return metadataByName;
+    function renderScanResults() {
+        el.scanResultsSection.hidden = state.scanResults.length === 0;
+        el.scanCountLabel.textContent = state.scanResults.length + ' commit' + (state.scanResults.length === 1 ? '' : 's');
+
+        if (state.scanResults.length === 0) {
+            el.scanResultsBody.innerHTML = '';
+            return;
         }
 
-        let createdCount = 0;
-        let reusedCount = 0;
-        let prCreatedCount = 0;
+        el.scanResultsBody.innerHTML = state.scanResults.map(function(commit, index) {
+            const pills = commit.metadata_items.slice(0, 4).map(function(m) {
+                return '<span class="badge">' + escapeHtml(m.name) + '</span>';
+            }).join(' ');
+            const extra = commit.metadata_items.length > 4
+                ? ' <span class="badge badge-more">+' + (commit.metadata_items.length - 4) + '</span>'
+                : '';
 
-        for (const metadataRow of metadataRows) {
-            const normalizedName = normalizeCompare(metadataRow.name);
-            const metadataByName = await getMetadataMapByType(metadataRow.typeId);
-            let metadata = metadataByName.get(normalizedName);
+            return [
+                '<tr>',
+                '  <td><code class="scan-hash" title="' + escapeHtml(commit.hash) + '">' + escapeHtml(commit.hash.slice(0, 12)) + '</code></td>',
+                '  <td class="scan-date">' + escapeHtml(formatDateTime(commit.authored_at)) + '</td>',
+                '  <td>' + escapeHtml(commit.author_name) + '<br><small class="scan-email-cell">' + escapeHtml(commit.author_email) + '</small></td>',
+                '  <td class="scan-pills">' + pills + extra + '</td>',
+                '  <td><button type="button" class="btn-use-commit btn-secondary btn-sm" data-use-commit="' + index + '">Usar commit</button></td>',
+                '</tr>'
+            ].join('');
+        }).join('');
 
-            if (!metadata) {
-                try {
-                    metadata = await api.post('/api/metadatas', {
-                        front_id: commonFields.frontId,
-                        sprint_id: commonFields.sprintId,
-                        metadata_name: metadataRow.name,
-                        metadata_type_id: metadataRow.typeId,
-                        change_type: metadataRow.changeType,
-                        ticket: commonFields.ticket || null,
-                        description: commonFields.description
-                    });
-                    createdCount += 1;
-                } catch (e) {
-                    if (e.status === 409 && e.payload && e.payload.existing_id) {
-                        const refreshedMap = await getMetadataMapByType(metadataRow.typeId, true);
-                        metadata = Array.from(refreshedMap.values()).find(function(item) {
-                            return String(item.id) === String(e.payload.existing_id);
-                        });
-                    } else {
-                        throw e;
-                    }
-                }
-            }
+        el.scanResultsBody.querySelectorAll('[data-use-commit]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                useCommit(state.scanResults[Number(btn.dataset.useCommit)]);
+            });
+        });
+    }
 
-            if (!metadata) {
-                continue;
-            }
-
-            if (metadataByName.has(normalizedName)) {
-                reusedCount += 1;
-            }
-
-            const currentPrs = Array.isArray(metadata.prs) ? metadata.prs : [];
-            const existingPrKeys = new Set(currentPrs.map(function(pr) {
-                return normalizeCompare(pr.label) + '|' + normalizeCompare(pr.url);
-            }));
-
-            for (const pr of prDefs) {
-                const prKey = normalizeCompare(pr.label) + '|' + normalizeCompare(pr.url);
-                if (existingPrKeys.has(prKey)) {
-                    continue;
-                }
-                await api.post('/api/metadatas/' + metadata.id + '/prs', pr);
-                existingPrKeys.add(prKey);
-                prCreatedCount += 1;
-            }
-
-            metadataByName.set(normalizedName, metadata);
+    function useCommit(commit) {
+        el.fRepoPath.value = state.lastScanRepoPath;
+        el.fCommitHash.value = commit.hash;
+        if (state.lastScanRepoPath) {
+            localStorage.setItem('release_notes_repo_path', state.lastScanRepoPath);
         }
-
-        hideError();
-        showInfo('Lote processado: ' + metadataRows.length + ' metadata(s), ' + createdCount + ' novo(s), ' + reusedCount + ' reaproveitado(s), ' + prCreatedCount + ' vinculacao(oes) de PR criada(s).');
-        resetBulkRows();
-        await loadItems();
+        setActiveTab('metadata');
+        loadMetadataFromCommit();
     }
 
     // ── Acoes ─────────────────────────────────────────────────────────────────
@@ -865,13 +1058,12 @@
         const description  = el.fDescription.value.trim();
 
         if (!frontId)      { showError('Selecione ou cadastre uma frente.', el.frontSelect); return; }
-        if (!sprintId)     { showError('Selecione ou cadastre uma sprint.', el.sprintSelect); return; }
         if (!description)  { showError('Descreva a alteracao.', el.fDescription); return; }
 
         try {
             await submitBulkForm({
                 frontId: frontId,
-                sprintId: sprintId,
+                sprintId: sprintId || null,
                 ticket: ticket,
                 description: description
             });
@@ -884,6 +1076,53 @@
     function bindEvents() {
         el.tabBtnMetadata.addEventListener('click', function() { setActiveTab('metadata'); });
         el.tabBtnRelease.addEventListener('click', function() { setActiveTab('release'); });
+        el.tabBtnCommits.addEventListener('click', function() { setActiveTab('commits'); });
+
+        el.scanForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            scanCommits();
+        });
+
+        // Repo form
+        el.repoForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            el.repoFormError.hidden = true;
+            const name = el.repoName.value.trim();
+            const repoPath = el.repoPathSave.value.trim();
+            if (!name || !repoPath) {
+                el.repoFormError.hidden = false;
+                el.repoFormError.textContent = 'Preencha nome e caminho.';
+                return;
+            }
+            try {
+                await api.post('/api/repos', { name, repo_path: repoPath });
+                el.repoForm.reset();
+                await loadRepos();
+            } catch (err) {
+                el.repoFormError.hidden = false;
+                el.repoFormError.textContent = err.message;
+            }
+        });
+
+        // Repo selects -> fill path inputs
+        if (el.fRepoSelect) {
+            el.fRepoSelect.addEventListener('change', function() {
+                if (el.fRepoSelect.value) {
+                    el.fRepoPath.value = el.fRepoSelect.value;
+                    localStorage.setItem('release_notes_repo_path', el.fRepoSelect.value);
+                    el.fRepoSelect.value = '';
+                }
+            });
+        }
+        if (el.scanRepoSelect) {
+            el.scanRepoSelect.addEventListener('change', function() {
+                if (el.scanRepoSelect.value) {
+                    el.scanRepoPath.value = el.scanRepoSelect.value;
+                    localStorage.setItem('release_notes_scan_repo_path', el.scanRepoSelect.value);
+                    el.scanRepoSelect.value = '';
+                }
+            });
+        }
 
         el.form.addEventListener('submit', function(e) {
             e.preventDefault();
@@ -1060,6 +1299,10 @@
                 setTimeout(function() { el.btnCopyRelease.textContent = 'Copiar release'; }, 2000);
             });
         });
+
+        el.btnExportJson.addEventListener('click', function() { triggerExport('json'); });
+        el.btnExportCsv.addEventListener('click', function() { triggerExport('csv'); });
+        el.btnExportMd.addEventListener('click', function() { triggerExport('md'); });
     }
 
     function applyMetadataFilters() {
@@ -1186,7 +1429,12 @@
             el.fRepoPath.value = savedRepoPath;
         }
 
-        await Promise.all([loadFronts(), loadMetadataTypes()]);
+        const savedScanRepoPath = localStorage.getItem('release_notes_scan_repo_path');
+        if (savedScanRepoPath) {
+            el.scanRepoPath.value = savedScanRepoPath;
+        }
+
+        await Promise.all([loadFronts(), loadMetadataTypes(), loadRepos()]);
         await loadFormSprints(null);
         await loadFilterSprints('');
         
