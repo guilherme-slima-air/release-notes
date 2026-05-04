@@ -234,6 +234,42 @@
         </section>
 
         <section id="tab-pane-commits" class="tab-pane" hidden>
+            <section class="panel people-panel">
+                <div class="section-head">
+                    <h2>Pessoas salvas</h2>
+                </div>
+
+                <form id="people-form" novalidate autocomplete="off" class="people-form">
+                    <input id="person-id" type="hidden">
+                    <div class="form-grid">
+                        <label class="field">
+                            <span>Nome *</span>
+                            <input id="person-name" type="text" placeholder="Ex.: Joao Silva">
+                        </label>
+
+                        <label class="field">
+                            <span>Email *</span>
+                            <input id="person-email" type="email" placeholder="dev@company.com">
+                        </label>
+
+                        <label class="field field-full">
+                            <span>Repositorio padrao (opcional)</span>
+                            <input id="person-default-repo" type="text" placeholder="C:/repos/salesforce">
+                        </label>
+                    </div>
+
+                    <div id="people-form-error" class="form-error" hidden></div>
+                    <div id="people-form-info" class="form-info" hidden></div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn-primary" id="btn-save-person">Salvar pessoa</button>
+                        <button type="button" class="btn-secondary" id="btn-cancel-person-edit" hidden>Cancelar edicao</button>
+                    </div>
+                </form>
+
+                <div id="people-list" class="people-list"></div>
+            </section>
+
             <section class="panel form-panel">
                 <div class="section-head">
                     <h2>Buscar commits por email</h2>
@@ -241,6 +277,13 @@
 
                 <form id="scan-form" novalidate autocomplete="off">
                     <div class="form-grid">
+                        <label class="field field-full">
+                            <span>Pessoa salva (opcional)</span>
+                            <select id="scan-person-select">
+                                <option value="">Selecionar pessoa...</option>
+                            </select>
+                        </label>
+
                         <label class="field field-full">
                             <span>Email do autor *</span>
                             <input id="scan-email" type="email" required placeholder="Ex.: dev@company.com">

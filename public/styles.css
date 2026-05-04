@@ -712,6 +712,43 @@ button:hover {
 .repo-path-wrap select { width: auto; min-width: 140px; max-width: 220px; }
 .btn-sm { padding: 4px 10px; font-size: 0.8rem; }
 
+/* ─── People ───────────────────────────────────────────────────────────────── */
+.people-panel { margin-bottom: 8px; }
+.people-form .form-actions { margin-top: 10px; }
+.people-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.person-card {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    background: var(--surface-strong);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+.person-card-info {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+.person-card-info strong {
+    font-size: 0.95rem;
+}
+.person-card-info span {
+    font-size: 0.82rem;
+    color: var(--muted);
+    word-break: break-word;
+}
+.person-card-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.muted-inline {
+    font-style: italic;
+}
+
 /* ── Scan results table ───────────────────────────────────────────────────── */
 
 .table-wrap {
@@ -792,5 +829,14 @@ button:hover {
 
     .bulk-row .bulk-remove-btn {
         justify-self: end;
+    }
+
+    .person-card {
+        flex-direction: column;
+    }
+
+    .person-card-actions {
+        width: 100%;
+        justify-content: flex-end;
     }
 }

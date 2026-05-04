@@ -4,7 +4,14 @@
     // ── API helpers ──────────────────────────────────────────────────────────
     async function parseApiResponse(res) {
         if (res.ok) {
-            return res.json();
+            if (res.status === 204) {
+                return null;
+            }
+            const contentType = res.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+                return res.json();
+            }
+            return res.text();
         }
 
         let message = 'Erro inesperado';
@@ -59,6 +66,7 @@
         items: [],
         metadataTypes: [],
         repos: [],
+        people: [],
         filterFrontId: '',
         filterSprintId: '',
         filterTypeId: '',
@@ -86,6 +94,18 @@
         reposList: document.getElementById('repos-list'),
         fRepoSelect: document.getElementById('f-repo-select'),
         scanRepoSelect: document.getElementById('scan-repo-select'),
+        // People
+        peopleForm: document.getElementById('people-form'),
+        personId: document.getElementById('person-id'),
+        personName: document.getElementById('person-name'),
+        personEmail: document.getElementById('person-email'),
+        personDefaultRepo: document.getElementById('person-default-repo'),
+        peopleFormError: document.getElementById('people-form-error'),
+        peopleFormInfo: document.getElementById('people-form-info'),
+        btnCancelPersonEdit: document.getElementById('btn-cancel-person-edit'),
+        btnSavePerson: document.getElementById('btn-save-person'),
+        peopleList: document.getElementById('people-list'),
+        scanPersonSelect: document.getElementById('scan-person-select'),
         // Scan form
         scanForm: document.getElementById('scan-form'),
         scanEmail: document.getElementById('scan-email'),
@@ -240,6 +260,30 @@
         el.commitInfo.textContent = '';
         el.commitInfo.classList.remove('form-error');
         el.commitInfo.classList.add('form-info');
+    }
+
+    function hidePeopleFeedback() {
+        if (!el.peopleFormError || !el.peopleFormInfo) return;
+        el.peopleFormError.hidden = true;
+        el.peopleFormError.textContent = '';
+        el.peopleFormInfo.hidden = true;
+        el.peopleFormInfo.textContent = '';
+    }
+
+    function showPeopleError(message) {
+        if (!el.peopleFormError || !el.peopleFormInfo) return;
+        el.peopleFormInfo.hidden = true;
+        el.peopleFormInfo.textContent = '';
+        el.peopleFormError.hidden = false;
+        el.peopleFormError.textContent = message;
+    }
+
+    function showPeopleInfo(message) {
+        if (!el.peopleFormError || !el.peopleFormInfo) return;
+        el.peopleFormError.hidden = true;
+        el.peopleFormError.textContent = '';
+        el.peopleFormInfo.hidden = false;
+        el.peopleFormInfo.textContent = message;
     }
 
     function setActiveTab(tabName) {
@@ -409,6 +453,122 @@
         }
         renderRepos();
         syncRepoSelects();
+    }
+
+    async function loadPeople() {
+        if (!el.peopleList || !el.scanPersonSelect) {
+            return;
+        }
+
+        let payload;
+        try {
+            payload = await api.get('/api/people');
+        } catch (err) {
+            if (err && err.status === 404) {
+                state.people = [];
+                renderPeople();
+                syncPeopleSelect();
+                return;
+            }
+            throw err;
+        }
+
+        state.people = Array.isArray(payload?.items) ? payload.items : [];
+        renderPeople();
+        syncPeopleSelect();
+    }
+
+    function resetPersonForm() {
+        if (!el.peopleForm) return;
+        el.peopleForm.reset();
+        if (el.personId) {
+            el.personId.value = '';
+        }
+        if (el.btnSavePerson) {
+            el.btnSavePerson.textContent = 'Salvar pessoa';
+        }
+        if (el.btnCancelPersonEdit) {
+            el.btnCancelPersonEdit.hidden = true;
+        }
+    }
+
+    function beginPersonEdit(person) {
+        if (!el.personId) return;
+        el.personId.value = String(person.id);
+        el.personName.value = person.name || '';
+        el.personEmail.value = person.email || '';
+        el.personDefaultRepo.value = person.default_repo_path || '';
+        if (el.btnSavePerson) {
+            el.btnSavePerson.textContent = 'Salvar alteracoes';
+        }
+        if (el.btnCancelPersonEdit) {
+            el.btnCancelPersonEdit.hidden = false;
+        }
+        el.personName.focus();
+    }
+
+    function renderPeople() {
+        if (!el.peopleList) return;
+
+        if (state.people.length === 0) {
+            el.peopleList.innerHTML = '<p class="empty-state" style="margin-top:10px">Nenhuma pessoa cadastrada.</p>';
+            return;
+        }
+
+        el.peopleList.innerHTML = state.people.map(function(person) {
+            const repoText = person.default_repo_path
+                ? '<span>' + escapeHtml(person.default_repo_path) + '</span>'
+                : '<span class="muted-inline">Sem repositorio padrao</span>';
+            return [
+                '<div class="person-card">',
+                '  <div class="person-card-info">',
+                '    <strong>' + escapeHtml(person.name) + '</strong>',
+                '    <span>' + escapeHtml(person.email) + '</span>',
+                '    ' + repoText,
+                '  </div>',
+                '  <div class="person-card-actions">',
+                '    <button type="button" class="btn-secondary btn-sm" data-edit-person="' + person.id + '">Editar</button>',
+                '    <button type="button" class="btn-danger btn-sm" data-delete-person="' + person.id + '">Remover</button>',
+                '  </div>',
+                '</div>'
+            ].join('');
+        }).join('');
+
+        el.peopleList.querySelectorAll('[data-edit-person]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                const personId = Number(btn.dataset.editPerson);
+                const person = state.people.find(function(item) { return Number(item.id) === personId; });
+                if (!person) return;
+                hidePeopleFeedback();
+                beginPersonEdit(person);
+            });
+        });
+
+        el.peopleList.querySelectorAll('[data-delete-person]').forEach(function(btn) {
+            btn.addEventListener('click', async function() {
+                const personId = Number(btn.dataset.deletePerson);
+                try {
+                    await api.del('/api/people/' + personId);
+                    showPeopleInfo('Pessoa removida com sucesso.');
+                    if (String(el.personId.value) === String(personId)) {
+                        resetPersonForm();
+                    }
+                    await loadPeople();
+                } catch (err) {
+                    showPeopleError(err.message);
+                }
+            });
+        });
+    }
+
+    function syncPeopleSelect() {
+        if (!el.scanPersonSelect) return;
+        const opts = ['<option value="">Selecionar pessoa...</option>'];
+        state.people.forEach(function(person) {
+            const label = person.name + ' - ' + person.email;
+            opts.push('<option value="' + escapeHtml(String(person.id)) + '">' + escapeHtml(label) + '</option>');
+        });
+        el.scanPersonSelect.innerHTML = opts.join('');
     }
 
     function renderRepos() {
@@ -1124,6 +1284,72 @@
             });
         }
 
+        if (el.peopleForm) {
+            el.peopleForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                hidePeopleFeedback();
+
+                const id = Number(el.personId.value || 0);
+                const name = el.personName.value.trim();
+                const email = el.personEmail.value.trim();
+                const defaultRepoPath = el.personDefaultRepo.value.trim();
+
+                if (!name || !email) {
+                    showPeopleError('Preencha nome e email.');
+                    return;
+                }
+
+                const payload = {
+                    name: name,
+                    email: email,
+                    default_repo_path: defaultRepoPath || null
+                };
+
+                try {
+                    if (id > 0) {
+                        await api.put('/api/people/' + id, payload);
+                        showPeopleInfo('Pessoa atualizada com sucesso.');
+                    } else {
+                        await api.post('/api/people', payload);
+                        showPeopleInfo('Pessoa cadastrada com sucesso.');
+                    }
+                    resetPersonForm();
+                    await loadPeople();
+                } catch (err) {
+                    showPeopleError(err.message);
+                }
+            });
+        }
+
+        if (el.btnCancelPersonEdit) {
+            el.btnCancelPersonEdit.addEventListener('click', function() {
+                hidePeopleFeedback();
+                resetPersonForm();
+            });
+        }
+
+        if (el.scanPersonSelect) {
+            el.scanPersonSelect.addEventListener('change', function() {
+                const personId = Number(el.scanPersonSelect.value || 0);
+                if (!personId) return;
+
+                const person = state.people.find(function(item) {
+                    return Number(item.id) === personId;
+                });
+
+                if (!person) {
+                    return;
+                }
+
+                el.scanEmail.value = person.email || '';
+                if (person.default_repo_path) {
+                    el.scanRepoPath.value = person.default_repo_path;
+                    localStorage.setItem('release_notes_scan_repo_path', person.default_repo_path);
+                }
+                el.scanPersonSelect.value = '';
+            });
+        }
+
         el.form.addEventListener('submit', function(e) {
             e.preventDefault();
             submitForm();
@@ -1423,6 +1649,7 @@
     async function init() {
         ensureBulkRows();
         setActiveTab('metadata');
+        resetPersonForm();
 
         const savedRepoPath = localStorage.getItem('release_notes_repo_path');
         if (savedRepoPath) {
@@ -1434,7 +1661,7 @@
             el.scanRepoPath.value = savedScanRepoPath;
         }
 
-        await Promise.all([loadFronts(), loadMetadataTypes(), loadRepos()]);
+        await Promise.all([loadFronts(), loadMetadataTypes(), loadRepos(), loadPeople()]);
         await loadFormSprints(null);
         await loadFilterSprints('');
         

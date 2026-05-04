@@ -254,6 +254,7 @@ Botoes de exportacao na aba Gerar release note com estado de carregamento ("Expo
 2. Endpoint de health para operacao local.
 3. Lista de verificacao de entrega (itens sem PR, sem ticket, sem descricao).
 4. Presets de filtro por time/frente.
+5. Cadastro de pessoas (apelido + email + repositorio padrao) para reutilizar no fluxo de busca de commits por email.
 
 ## 19. Cadencia SDD sugerida
 1. Uma spec curta por funcionalidade.

@@ -59,6 +59,14 @@ db.exec(`
     url         TEXT    NOT NULL,
     created_at  TEXT    NOT NULL
   );
+    CREATE TABLE IF NOT EXISTS people (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        name              TEXT    NOT NULL,
+        email             TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+        default_repo_path TEXT,
+        created_at        TEXT    NOT NULL,
+        updated_at        TEXT    NOT NULL
+    );
 `);
 
 db.exec(`
@@ -66,6 +74,13 @@ db.exec(`
   SET metadata_name = TRIM(metadata_name),
       description = TRIM(description),
       ticket = NULLIF(TRIM(COALESCE(ticket, '')), '');
+`);
+
+db.exec(`
+    UPDATE people
+    SET name = TRIM(name),
+            email = LOWER(TRIM(email)),
+            default_repo_path = NULLIF(TRIM(COALESCE(default_repo_path, '')), '');
 `);
 
 // Em migracoes antigas, pull_requests pode ter ficado apontando para metadatas_old.
@@ -353,6 +368,21 @@ function parseOptionalBoolean(value) {
     return undefined;
 }
 
+function normalizeRepoPath(value) {
+    const trimmed = normalizeText(value);
+    if (!trimmed) return null;
+    return trimmed.replace(/[\\/]+$/, '');
+}
+
+function normalizeEmail(value) {
+    return normalizeText(value).toLowerCase();
+}
+
+function isValidEmail(email) {
+    // Validation intentionally simple: enough to reject malformed values without being over-restrictive.
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
 function buildExportFileName(extension) {
     const now = new Date();
     const pad = value => String(value).padStart(2, '0');
@@ -545,6 +575,126 @@ function extractMetadataName(filePath) {
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ── People ───────────────────────────────────────────────────────────────────
+app.get('/api/people', (req, res) => {
+    const search = normalizeText(req.query.q);
+    let rows;
+    if (search) {
+        const like = '%' + search.replace(/[%_\\]/g, c => '\\' + c) + '%';
+        rows = db.prepare(`
+            SELECT *
+            FROM people
+            WHERE name LIKE ? ESCAPE '\\'
+               OR email LIKE ? ESCAPE '\\'
+            ORDER BY name COLLATE NOCASE ASC, id ASC
+        `).all(like, like);
+    } else {
+        rows = db.prepare('SELECT * FROM people ORDER BY name COLLATE NOCASE ASC, id ASC').all();
+    }
+    return res.json({ items: rows, total: rows.length });
+});
+
+app.post('/api/people', (req, res) => {
+    const name = normalizeText(req.body?.name);
+    const email = normalizeEmail(req.body?.email);
+    const defaultRepoPath = normalizeRepoPath(req.body?.default_repo_path);
+
+    if (!name || !email) {
+        return res.status(400).json({ error: 'name e email obrigatorios' });
+    }
+    if (name.length > 120) {
+        return res.status(400).json({ error: 'name excede 120 caracteres' });
+    }
+    if (email.length > 254) {
+        return res.status(400).json({ error: 'email excede 254 caracteres' });
+    }
+    if (!isValidEmail(email)) {
+        return res.status(400).json({ error: 'email invalido' });
+    }
+    if (defaultRepoPath && defaultRepoPath.length > 500) {
+        return res.status(400).json({ error: 'default_repo_path excede 500 caracteres' });
+    }
+
+    const now = new Date().toISOString();
+    try {
+        const result = db.prepare(
+            'INSERT INTO people (name, email, default_repo_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+        ).run(name, email, defaultRepoPath, now, now);
+
+        const created = db.prepare('SELECT * FROM people WHERE id = ?').get(Number(result.lastInsertRowid));
+        return res.status(201).json(created);
+    } catch (e) {
+        const message = String(e?.message || '');
+        if (message.includes('UNIQUE constraint failed')) {
+            return res.status(409).json({ error: 'email ja cadastrado' });
+        }
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+app.put('/api/people/:id', (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) {
+        return res.status(400).json({ error: 'id invalido' });
+    }
+
+    const existing = db.prepare('SELECT id FROM people WHERE id = ?').get(id);
+    if (!existing) {
+        return res.status(404).json({ error: 'pessoa nao encontrada' });
+    }
+
+    const name = normalizeText(req.body?.name);
+    const email = normalizeEmail(req.body?.email);
+    const defaultRepoPath = normalizeRepoPath(req.body?.default_repo_path);
+
+    if (!name || !email) {
+        return res.status(400).json({ error: 'name e email obrigatorios' });
+    }
+    if (name.length > 120) {
+        return res.status(400).json({ error: 'name excede 120 caracteres' });
+    }
+    if (email.length > 254) {
+        return res.status(400).json({ error: 'email excede 254 caracteres' });
+    }
+    if (!isValidEmail(email)) {
+        return res.status(400).json({ error: 'email invalido' });
+    }
+    if (defaultRepoPath && defaultRepoPath.length > 500) {
+        return res.status(400).json({ error: 'default_repo_path excede 500 caracteres' });
+    }
+
+    const now = new Date().toISOString();
+    try {
+        db.prepare(
+            'UPDATE people SET name = ?, email = ?, default_repo_path = ?, updated_at = ? WHERE id = ?'
+        ).run(name, email, defaultRepoPath, now, id);
+
+        const updated = db.prepare('SELECT * FROM people WHERE id = ?').get(id);
+        return res.json(updated);
+    } catch (e) {
+        const message = String(e?.message || '');
+        if (message.includes('UNIQUE constraint failed')) {
+            return res.status(409).json({ error: 'email ja cadastrado' });
+        }
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+app.delete('/api/people/:id', (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) {
+        return res.status(400).json({ error: 'id invalido' });
+    }
+
+    const existing = db.prepare('SELECT id FROM people WHERE id = ?').get(id);
+    if (!existing) {
+        return res.status(404).json({ error: 'pessoa nao encontrada' });
+    }
+
+    db.prepare('DELETE FROM people WHERE id = ?').run(id);
+    return res.status(204).send();
+});
 
 // ── Repos ─────────────────────────────────────────────────────────────────────
 app.get('/api/repos', (_req, res) => {
