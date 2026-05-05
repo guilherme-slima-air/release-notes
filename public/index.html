@@ -24,6 +24,7 @@
             <button id="tab-btn-metadata" class="tab-switch is-active" type="button" role="tab" aria-selected="true">Incluir metadados</button>
             <button id="tab-btn-release" class="tab-switch" type="button" role="tab" aria-selected="false">Gerar release notes</button>
             <button id="tab-btn-commits" class="tab-switch" type="button" role="tab" aria-selected="false">Busca por commit</button>
+            <button id="tab-btn-authors" class="tab-switch" type="button" role="tab" aria-selected="false">Autores de commits</button>
         </section>
 
         <section id="tab-pane-metadata" class="tab-pane">
@@ -342,6 +343,72 @@
                             </tr>
                         </thead>
                         <tbody id="scan-results-body"></tbody>
+                    </table>
+                </div>
+            </section>
+        </section>
+
+        <section id="tab-pane-authors" class="tab-pane" hidden>
+            <section class="panel form-panel">
+                <div class="section-head">
+                    <h2>Listar autores por repositorio</h2>
+                </div>
+
+                <form id="author-scan-form" novalidate autocomplete="off">
+                    <div class="form-grid">
+                        <label class="field field-full">
+                            <span>Caminho do repositorio *</span>
+                            <div class="repo-path-wrap">
+                                <input id="author-scan-repo-path" type="text" required placeholder="C:/repos/salesforce">
+                                <select id="author-scan-repo-select" title="Usar repositorio salvo">
+                                    <option value="">Repo salvo...</option>
+                                </select>
+                            </div>
+                        </label>
+
+                        <label class="field">
+                            <span>Data inicial (opcional)</span>
+                            <input id="author-scan-since" type="date">
+                        </label>
+
+                        <label class="field">
+                            <span>Data final (opcional)</span>
+                            <input id="author-scan-until" type="date">
+                        </label>
+
+                        <label class="field">
+                            <span>Branch (opcional)</span>
+                            <input id="author-scan-branch" type="text" placeholder="Ex.: main">
+                        </label>
+                    </div>
+
+                    <div id="author-scan-error" class="form-error" hidden></div>
+                    <div id="author-scan-info" class="form-info" hidden></div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn-primary" id="btn-author-scan">Listar autores</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="panel list-panel" id="author-results-section" hidden>
+                <div class="section-head">
+                    <h2>Autores encontrados</h2>
+                    <strong id="author-count-label">0 autores</strong>
+                </div>
+
+                <div class="table-wrap">
+                    <table class="scan-results-table">
+                        <thead>
+                            <tr>
+                                <th>Nome</th>
+                                <th>Email</th>
+                                <th>Total de commits</th>
+                                <th>Ultimo commit</th>
+                                <th>Acao</th>
+                            </tr>
+                        </thead>
+                        <tbody id="author-results-body"></tbody>
                     </table>
                 </div>
             </section>

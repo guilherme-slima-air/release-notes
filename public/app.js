@@ -75,7 +75,9 @@
         highlightedMetadataId: '',
         activeTab: 'metadata',
         scanResults: [],
-        lastScanRepoPath: ''
+        lastScanRepoPath: '',
+        authorScanResults: [],
+        lastAuthorScanRepoPath: ''
     };
 
     // ── DOM refs ─────────────────────────────────────────────────────────────
@@ -83,9 +85,11 @@
         tabBtnMetadata: document.getElementById('tab-btn-metadata'),
         tabBtnRelease: document.getElementById('tab-btn-release'),
         tabBtnCommits: document.getElementById('tab-btn-commits'),
+        tabBtnAuthors: document.getElementById('tab-btn-authors'),
         tabPaneMetadata: document.getElementById('tab-pane-metadata'),
         tabPaneRelease: document.getElementById('tab-pane-release'),
         tabPaneCommits: document.getElementById('tab-pane-commits'),
+        tabPaneAuthors: document.getElementById('tab-pane-authors'),
         // Repos
         repoForm: document.getElementById('repo-form'),
         repoName: document.getElementById('f-repo-name'),
@@ -119,6 +123,19 @@
         scanResultsSection: document.getElementById('scan-results-section'),
         scanCountLabel: document.getElementById('scan-count-label'),
         scanResultsBody: document.getElementById('scan-results-body'),
+        // Author scan form
+        authorScanForm: document.getElementById('author-scan-form'),
+        authorScanRepoPath: document.getElementById('author-scan-repo-path'),
+        authorScanRepoSelect: document.getElementById('author-scan-repo-select'),
+        authorScanSince: document.getElementById('author-scan-since'),
+        authorScanUntil: document.getElementById('author-scan-until'),
+        authorScanBranch: document.getElementById('author-scan-branch'),
+        authorScanError: document.getElementById('author-scan-error'),
+        authorScanInfo: document.getElementById('author-scan-info'),
+        btnAuthorScan: document.getElementById('btn-author-scan'),
+        authorResultsSection: document.getElementById('author-results-section'),
+        authorCountLabel: document.getElementById('author-count-label'),
+        authorResultsBody: document.getElementById('author-results-body'),
         form: document.getElementById('metadata-form'),
         formError: document.getElementById('form-error'),
         // Form lookups — frente
@@ -292,14 +309,17 @@
         el.tabPaneMetadata.hidden = tabName !== 'metadata';
         el.tabPaneRelease.hidden = tabName !== 'release';
         el.tabPaneCommits.hidden = tabName !== 'commits';
+        el.tabPaneAuthors.hidden = tabName !== 'authors';
 
         el.tabBtnMetadata.classList.toggle('is-active', tabName === 'metadata');
         el.tabBtnRelease.classList.toggle('is-active', tabName === 'release');
         el.tabBtnCommits.classList.toggle('is-active', tabName === 'commits');
+        el.tabBtnAuthors.classList.toggle('is-active', tabName === 'authors');
 
         el.tabBtnMetadata.setAttribute('aria-selected', tabName === 'metadata' ? 'true' : 'false');
         el.tabBtnRelease.setAttribute('aria-selected', tabName === 'release' ? 'true' : 'false');
         el.tabBtnCommits.setAttribute('aria-selected', tabName === 'commits' ? 'true' : 'false');
+        el.tabBtnAuthors.setAttribute('aria-selected', tabName === 'authors' ? 'true' : 'false');
 
         if (tabName === 'release') {
             generateRelease();
@@ -604,6 +624,129 @@
         const html = opts.join('');
         if (el.fRepoSelect) el.fRepoSelect.innerHTML = html;
         if (el.scanRepoSelect) el.scanRepoSelect.innerHTML = html;
+        if (el.authorScanRepoSelect) el.authorScanRepoSelect.innerHTML = html;
+    }
+
+    function isEmailInPeople(email) {
+        const target = normalizeCompare(email);
+        return state.people.some(function(person) {
+            return normalizeCompare(person.email) === target;
+        });
+    }
+
+    async function addAuthorToPeople(author) {
+        const email = String(author?.email || '').trim();
+        if (!email) return;
+
+        const displayName = String(author?.name || '').trim() || email.split('@')[0];
+        const repoPath = (state.lastAuthorScanRepoPath || el.authorScanRepoPath.value || '').trim();
+
+        try {
+            await api.post('/api/people', {
+                name: displayName,
+                email: email,
+                default_repo_path: repoPath || null
+            });
+            el.authorScanInfo.hidden = false;
+            el.authorScanInfo.textContent = 'Pessoa adicionada ao cadastro: ' + email;
+            await loadPeople();
+            renderAuthorScanResults();
+        } catch (err) {
+            if (err && err.status === 409) {
+                el.authorScanInfo.hidden = false;
+                el.authorScanInfo.textContent = 'Este email ja esta cadastrado: ' + email;
+                return;
+            }
+            el.authorScanError.hidden = false;
+            el.authorScanError.textContent = 'Erro ao adicionar pessoa: ' + err.message;
+        }
+    }
+
+    async function scanCommitAuthors() {
+        el.authorScanError.hidden = true;
+        el.authorScanError.textContent = '';
+        el.authorScanInfo.hidden = true;
+        el.authorScanInfo.textContent = '';
+
+        const repoPath = el.authorScanRepoPath.value.trim();
+        const since = el.authorScanSince.value ? el.authorScanSince.value + 'T00:00:00' : '';
+        const until = el.authorScanUntil.value ? el.authorScanUntil.value + 'T23:59:59' : '';
+        const branch = el.authorScanBranch.value.trim();
+
+        if (!repoPath) {
+            el.authorScanError.hidden = false;
+            el.authorScanError.textContent = 'Informe o caminho do repositorio.';
+            el.authorScanRepoPath.focus();
+            return;
+        }
+
+        el.btnAuthorScan.disabled = true;
+        const prevText = el.btnAuthorScan.textContent;
+        el.btnAuthorScan.textContent = 'Listando...';
+        el.authorScanInfo.hidden = false;
+        el.authorScanInfo.textContent = 'Consultando autores...';
+
+        try {
+            const payload = await api.post('/api/scan-commit-authors', {
+                repo_path: repoPath,
+                since: since || undefined,
+                until: until || undefined,
+                branch: branch || undefined
+            });
+
+            state.authorScanResults = Array.isArray(payload.authors) ? payload.authors : [];
+            state.lastAuthorScanRepoPath = repoPath;
+            localStorage.setItem('release_notes_author_scan_repo_path', repoPath);
+
+            if (state.authorScanResults.length === 0) {
+                el.authorScanInfo.textContent = 'Nenhum autor encontrado para os filtros informados.';
+            } else {
+                el.authorScanInfo.textContent = state.authorScanResults.length + ' autor(es) encontrado(s).';
+            }
+
+            renderAuthorScanResults();
+        } catch (e) {
+            el.authorScanError.hidden = false;
+            el.authorScanError.textContent = 'Erro ao listar autores: ' + e.message;
+            el.authorScanInfo.hidden = true;
+        } finally {
+            el.btnAuthorScan.disabled = false;
+            el.btnAuthorScan.textContent = prevText;
+        }
+    }
+
+    function renderAuthorScanResults() {
+        el.authorResultsSection.hidden = state.authorScanResults.length === 0;
+        el.authorCountLabel.textContent = state.authorScanResults.length + ' autor' + (state.authorScanResults.length === 1 ? '' : 'es');
+
+        if (state.authorScanResults.length === 0) {
+            el.authorResultsBody.innerHTML = '';
+            return;
+        }
+
+        el.authorResultsBody.innerHTML = state.authorScanResults.map(function(author, index) {
+            const alreadyRegistered = isEmailInPeople(author.email);
+            const actionLabel = alreadyRegistered ? 'Ja cadastrado' : 'Adicionar';
+            const disabledAttr = alreadyRegistered ? ' disabled' : '';
+
+            return [
+                '<tr>',
+                '  <td>' + escapeHtml(author.name || '-') + '</td>',
+                '  <td><small class="scan-email-cell">' + escapeHtml(author.email || '-') + '</small></td>',
+                '  <td>' + escapeHtml(String(author.commit_count || 0)) + '</td>',
+                '  <td class="scan-date">' + escapeHtml(formatDateTime(author.last_commit_at)) + '</td>',
+                '  <td><button type="button" class="btn-secondary btn-sm" data-add-author="' + index + '"' + disabledAttr + '>' + actionLabel + '</button></td>',
+                '</tr>'
+            ].join('');
+        }).join('');
+
+        el.authorResultsBody.querySelectorAll('[data-add-author]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                const idx = Number(btn.dataset.addAuthor);
+                const author = state.authorScanResults[idx];
+                addAuthorToPeople(author);
+            });
+        });
     }
 
     async function loadFronts() {
@@ -1237,6 +1380,7 @@
         el.tabBtnMetadata.addEventListener('click', function() { setActiveTab('metadata'); });
         el.tabBtnRelease.addEventListener('click', function() { setActiveTab('release'); });
         el.tabBtnCommits.addEventListener('click', function() { setActiveTab('commits'); });
+        el.tabBtnAuthors.addEventListener('click', function() { setActiveTab('authors'); });
 
         el.scanForm.addEventListener('submit', function(e) {
             e.preventDefault();
@@ -1281,6 +1425,22 @@
                     localStorage.setItem('release_notes_scan_repo_path', el.scanRepoSelect.value);
                     el.scanRepoSelect.value = '';
                 }
+            });
+        }
+        if (el.authorScanRepoSelect) {
+            el.authorScanRepoSelect.addEventListener('change', function() {
+                if (el.authorScanRepoSelect.value) {
+                    el.authorScanRepoPath.value = el.authorScanRepoSelect.value;
+                    localStorage.setItem('release_notes_author_scan_repo_path', el.authorScanRepoSelect.value);
+                    el.authorScanRepoSelect.value = '';
+                }
+            });
+        }
+
+        if (el.authorScanForm) {
+            el.authorScanForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                scanCommitAuthors();
             });
         }
 
@@ -1659,6 +1819,11 @@
         const savedScanRepoPath = localStorage.getItem('release_notes_scan_repo_path');
         if (savedScanRepoPath) {
             el.scanRepoPath.value = savedScanRepoPath;
+        }
+
+        const savedAuthorScanRepoPath = localStorage.getItem('release_notes_author_scan_repo_path');
+        if (savedAuthorScanRepoPath && el.authorScanRepoPath) {
+            el.authorScanRepoPath.value = savedAuthorScanRepoPath;
         }
 
         await Promise.all([loadFronts(), loadMetadataTypes(), loadRepos(), loadPeople()]);

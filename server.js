@@ -1382,6 +1382,94 @@ app.delete('/api/prs/:id', (req, res) => {
     res.json({ ok: true });
 });
 
+// ── Scan unique commit authors ───────────────────────────────────────────────
+app.post('/api/scan-commit-authors', async (req, res) => {
+    try {
+        const repoPath = assertValidRepoPath(String(req.body?.repo_path || '').trim());
+
+        const args = [
+            'log', '--all',
+            '--pretty=format:%aN%x09%aE%x09%aI'
+        ];
+
+        const since = String(req.body?.since || '').trim();
+        const until = String(req.body?.until || '').trim();
+        const branch = String(req.body?.branch || '').trim();
+
+        if (since) args.push(`--since=${since}`);
+        if (until) args.push(`--until=${until}`);
+        if (branch) {
+            if (branch.startsWith('-') || !/^[a-zA-Z0-9/_.\-@]+$/.test(branch)) {
+                return res.status(400).json({ error: 'branch invalido' });
+            }
+            args.push(branch);
+        }
+
+        const { stdout } = await runGit(repoPath, args);
+        const rows = String(stdout || '')
+            .split(/\r?\n/)
+            .map(line => line.trim())
+            .filter(Boolean);
+
+        const groupedByEmail = new Map();
+
+        rows.forEach(line => {
+            const parts = line.split('\t');
+            const name = normalizeText(parts[0] || '');
+            const email = normalizeText(parts[1] || '').toLowerCase();
+            const authoredAt = normalizeText(parts[2] || '');
+
+            if (!email) {
+                return;
+            }
+
+            const current = groupedByEmail.get(email);
+            if (!current) {
+                groupedByEmail.set(email, {
+                    name: name || email,
+                    email,
+                    commit_count: 1,
+                    last_commit_at: authoredAt || null
+                });
+                return;
+            }
+
+            current.commit_count += 1;
+
+            const currentTime = Date.parse(current.last_commit_at || '');
+            const candidateTime = Date.parse(authoredAt || '');
+            if (!Number.isNaN(candidateTime) && (Number.isNaN(currentTime) || candidateTime > currentTime)) {
+                current.last_commit_at = authoredAt;
+                if (name) {
+                    current.name = name;
+                }
+            }
+        });
+
+        const authors = Array.from(groupedByEmail.values())
+            .sort((a, b) => {
+                if (b.commit_count !== a.commit_count) {
+                    return b.commit_count - a.commit_count;
+                }
+                return a.email.localeCompare(b.email, 'pt-BR');
+            });
+
+        res.json({ authors, total: authors.length });
+    } catch (error) {
+        if (error && Number.isInteger(error.status)) {
+            return res.status(error.status).json({ error: error.message });
+        }
+        if (error && error.code === 'ENOENT') {
+            return res.status(500).json({ error: 'git nao encontrado no sistema' });
+        }
+        const stderr = String(error?.stderr || '').trim();
+        if (stderr) {
+            return res.status(500).json({ error: stderr });
+        }
+        res.status(500).json({ error: error?.message || 'Erro ao listar autores de commit' });
+    }
+});
+
 // ── Scan commits by author email ──────────────────────────────────────────────
 app.post('/api/scan-commits', async (req, res) => {
     try {
