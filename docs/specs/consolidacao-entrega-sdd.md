@@ -51,6 +51,8 @@ Informa email, periodo e branch opcional, escolhe commit e reaproveita no cadast
 Filtra por contexto e gera texto de release.
 5. Exportacao multiformato.
 Exporta o conjunto filtrado da entrega em JSON, CSV ou Markdown.
+6. Varredura local de PRs por merge commit.
+Seleciona repositorio cadastrado e periodo em dias, sistema varre merge commits locais, cruza arquivos alterados com metadados cadastrados e sugere vinculos de PR para salvar em lote.
 
 ## 7. Estado atual implementado
 1. Endpoint transacional de lote implementado.
@@ -70,6 +72,9 @@ RF-09: Aplicar os mesmos filtros da tela no endpoint de export.
 RF-10: Incluir metadados de contexto da exportacao (data/hora e filtros ativos).
 RF-11: Quando nao houver itens, retornar arquivo valido e legivel (sem erro tecnico).
 RF-12: Retornar 400 para formato invalido.
+RF-13: Permitir varrer merge commits locais e identificar PRs por padrao de mensagem de merge.
+RF-14: Exibir matches PR x metadata com selecao em massa antes de persistir.
+RF-15: Salvar vinculos selecionados com dedupe por metadata_id + url.
 
 ## 9. Requisitos nao funcionais (RNF)
 RNF-01: Operacao de lote deve ser atomica no banco (transacao).
@@ -78,6 +83,8 @@ RNF-03: API deve responder em JSON padrao para erros.
 RNF-04: Compatibilidade com execucao local Windows.
 RNF-05: Exportacao ate 5.000 itens deve responder em ate 2 segundos em ambiente local tipico.
 RNF-06: Encoding UTF-8 em todos os formatos exportados.
+RNF-07: Varredura de PR deve funcionar offline (sem dependencia da API do GitHub).
+RNF-08: Parse de merge commit nao deve conter regra hardcoded de organizacao/projeto especifico.
 
 ## 10. Contratos de API
 
@@ -255,6 +262,18 @@ Botoes de exportacao na aba Gerar release note com estado de carregamento ("Expo
 3. Lista de verificacao de entrega (itens sem PR, sem ticket, sem descricao).
 4. Presets de filtro por time/frente.
 5. Cadastro de pessoas (apelido + email + repositorio padrao) para reutilizar no fluxo de busca de commits por email.
+6. Busca de PRs no GitHub por metadata e branch como fallback opcional para casos nao cobertos por merge commit local (ver spec: busca-prs-github-sdd.md).
+
+## 20. Atualizacoes recentes
+1. 2026-05-05 - Implementada aba "Varrer PRs do git" com fluxo local:
+repositorio + periodo (dias) -> scan de merge commits -> cruzamento com metadados -> selecao em massa -> persistencia de PRs vinculadas.
+2. 2026-05-05 - Parse de PR baseado em padrao generico de merge commit, sem hardcode de organizacao.
+3. 2026-05-05 - Adicionado alternador de tema (claro/escuro) com persistencia local para melhorar uso em ambiente de desenvolvimento.
+4. 2026-05-05 - Ajustada varredura de PR para usar diff-tree em merge commit e janela por dia calendario, aumentando cobertura de matches recentes.
+5. 2026-05-05 - Ajustado topo (hero) para respeitar tema escuro completo, incluindo fundo do painel.
+6. 2026-05-05 - Adicionados filtros pre-varredura por branch e por autor na aba "Varrer PRs do git".
+7. 2026-05-05 - Adicionado autor da PR (autor do merge commit: nome/email) no resultado agrupado por PR.
+8. 2026-05-05 - Ajustado tema escuro dos cards da aba "Incluir metadados" (card principal, bloco de PR e empty state).
 
 ## 19. Cadencia SDD sugerida
 1. Uma spec curta por funcionalidade.

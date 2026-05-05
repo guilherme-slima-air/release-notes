@@ -23,6 +23,16 @@
                 message = payload.error || message;
             } else {
                 message = await res.text() || message;
+                const cannotMatch = String(message).match(/Cannot\s+(GET|POST|PUT|DELETE)\s+([^<\s]+)/i);
+                if (cannotMatch) {
+                    const method = (cannotMatch[1] || '').toUpperCase();
+                    const route = cannotMatch[2] || '';
+                    if (method === 'POST' && /\/api\/repos\/\d+\/scan-prs/.test(route)) {
+                        message = 'Endpoint de varredura nao encontrado no servidor atual. Reinicie o backend para carregar as rotas novas.';
+                    } else {
+                        message = 'Rota nao encontrada no servidor (' + method + ' ' + route + ').';
+                    }
+                }
             }
         } catch (e) {
             message = 'Erro ao processar resposta: ' + e.message;
@@ -77,19 +87,44 @@
         scanResults: [],
         lastScanRepoPath: '',
         authorScanResults: [],
-        lastAuthorScanRepoPath: ''
+        lastAuthorScanRepoPath: '',
+        prBranchSelectedMetadata: null,
+        prBranchSelectedBranches: [''],
+        scanPrResults: [],
+        scanPrRepoId: null
     };
 
     // ── DOM refs ─────────────────────────────────────────────────────────────
     const el = {
+        btnThemeToggle: document.getElementById('btn-theme-toggle'),
         tabBtnMetadata: document.getElementById('tab-btn-metadata'),
         tabBtnRelease: document.getElementById('tab-btn-release'),
         tabBtnCommits: document.getElementById('tab-btn-commits'),
         tabBtnAuthors: document.getElementById('tab-btn-authors'),
+        tabBtnPrBranch: document.getElementById('tab-btn-pr-branch'),
+        tabBtnScanPrs: document.getElementById('tab-btn-scan-prs'),
         tabPaneMetadata: document.getElementById('tab-pane-metadata'),
         tabPaneRelease: document.getElementById('tab-pane-release'),
         tabPaneCommits: document.getElementById('tab-pane-commits'),
         tabPaneAuthors: document.getElementById('tab-pane-authors'),
+        tabPanePrBranch: document.getElementById('tab-pane-pr-branch'),
+        tabPaneScanPrs: document.getElementById('tab-pane-scan-prs'),
+        // Scan PRs
+        scanPrsForm: document.getElementById('scan-prs-form'),
+        scanPrsRepoSelect: document.getElementById('scan-prs-repo-select'),
+        scanPrsSinceDays: document.getElementById('scan-prs-since-days'),
+        scanPrsBranchFilter: document.getElementById('scan-prs-branch-filter'),
+        scanPrsAuthorFilter: document.getElementById('scan-prs-author-filter'),
+        scanPrsError: document.getElementById('scan-prs-error'),
+        scanPrsInfo: document.getElementById('scan-prs-info'),
+        btnScanPrs: document.getElementById('btn-scan-prs'),
+        scanPrsResultsSection: document.getElementById('scan-prs-results-section'),
+        scanPrsCountLabel: document.getElementById('scan-prs-count-label'),
+        scanPrsResultsContainer: document.getElementById('scan-prs-results-container'),
+        btnScanPrsSelectAll: document.getElementById('btn-scan-prs-select-all'),
+        btnScanPrsDeselectAll: document.getElementById('btn-scan-prs-deselect-all'),
+        btnSaveScannedPrs: document.getElementById('btn-save-scanned-prs'),
+        scanPrsSaveInfo: document.getElementById('scan-prs-save-info'),
         // Repos
         repoForm: document.getElementById('repo-form'),
         repoName: document.getElementById('f-repo-name'),
@@ -136,6 +171,21 @@
         authorResultsSection: document.getElementById('author-results-section'),
         authorCountLabel: document.getElementById('author-count-label'),
         authorResultsBody: document.getElementById('author-results-body'),
+        // PR branch search
+        prBranchForm: document.getElementById('pr-branch-form'),
+        prBranchMetadataSearch: document.getElementById('pr-branch-metadata-search'),
+        prMetadataDropdown: document.getElementById('pr-metadata-dropdown'),
+        prMetadataSelected: document.getElementById('pr-metadata-selected'),
+        prMetadataSelectedName: document.getElementById('pr-metadata-selected-name'),
+        btnClearPrMetadata: document.getElementById('btn-clear-pr-metadata'),
+        prBranchesList: document.getElementById('pr-branches-list'),
+        btnAddBranch: document.getElementById('btn-add-branch'),
+        prBranchError: document.getElementById('pr-branch-error'),
+        prBranchInfo: document.getElementById('pr-branch-info'),
+        btnSearchPrBranch: document.getElementById('btn-search-pr-branch'),
+        prBranchResultsSection: document.getElementById('pr-branch-results-section'),
+        prBranchCountLabel: document.getElementById('pr-branch-count-label'),
+        prBranchResultsContainer: document.getElementById('pr-branch-results-container'),
         form: document.getElementById('metadata-form'),
         formError: document.getElementById('form-error'),
         // Form lookups — frente
@@ -244,6 +294,37 @@
             .trim();
     }
 
+    function getPreferredTheme() {
+        const saved = localStorage.getItem('release_notes_theme');
+        if (saved === 'dark' || saved === 'light') {
+            return saved;
+        }
+        return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+
+    function applyTheme(theme) {
+        const safeTheme = theme === 'dark' ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', safeTheme);
+        localStorage.setItem('release_notes_theme', safeTheme);
+
+        if (el.btnThemeToggle) {
+            el.btnThemeToggle.textContent = safeTheme === 'dark' ? '🔦 Tema claro' : '🔦 Tema escuro';
+            el.btnThemeToggle.setAttribute('aria-label', safeTheme === 'dark' ? 'Alternar para tema claro' : 'Alternar para tema escuro');
+            el.btnThemeToggle.setAttribute('title', safeTheme === 'dark' ? 'Alternar para tema claro' : 'Alternar para tema escuro');
+        }
+    }
+
+    function initThemeToggle() {
+        applyTheme(getPreferredTheme());
+
+        if (el.btnThemeToggle) {
+            el.btnThemeToggle.addEventListener('click', function() {
+                const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+                applyTheme(currentTheme === 'dark' ? 'light' : 'dark');
+            });
+        }
+    }
+
     function showError(msg, focusEl) {
         el.formError.hidden = false;
         el.formError.textContent = msg;
@@ -310,16 +391,22 @@
         el.tabPaneRelease.hidden = tabName !== 'release';
         el.tabPaneCommits.hidden = tabName !== 'commits';
         el.tabPaneAuthors.hidden = tabName !== 'authors';
+        el.tabPanePrBranch.hidden = tabName !== 'pr-branch';
+        if (el.tabPaneScanPrs) el.tabPaneScanPrs.hidden = tabName !== 'scan-prs';
 
         el.tabBtnMetadata.classList.toggle('is-active', tabName === 'metadata');
         el.tabBtnRelease.classList.toggle('is-active', tabName === 'release');
         el.tabBtnCommits.classList.toggle('is-active', tabName === 'commits');
         el.tabBtnAuthors.classList.toggle('is-active', tabName === 'authors');
+        el.tabBtnPrBranch.classList.toggle('is-active', tabName === 'pr-branch');
+        if (el.tabBtnScanPrs) el.tabBtnScanPrs.classList.toggle('is-active', tabName === 'scan-prs');
 
         el.tabBtnMetadata.setAttribute('aria-selected', tabName === 'metadata' ? 'true' : 'false');
         el.tabBtnRelease.setAttribute('aria-selected', tabName === 'release' ? 'true' : 'false');
         el.tabBtnCommits.setAttribute('aria-selected', tabName === 'commits' ? 'true' : 'false');
         el.tabBtnAuthors.setAttribute('aria-selected', tabName === 'authors' ? 'true' : 'false');
+        el.tabBtnPrBranch.setAttribute('aria-selected', tabName === 'pr-branch' ? 'true' : 'false');
+        if (el.tabBtnScanPrs) el.tabBtnScanPrs.setAttribute('aria-selected', tabName === 'scan-prs' ? 'true' : 'false');
 
         if (tabName === 'release') {
             generateRelease();
@@ -352,7 +439,7 @@
         const row = document.createElement('div');
         row.className = 'bulk-row bulk-metadata-row';
         row.innerHTML = [
-            '<input type="text" class="bulk-metadata-input" placeholder="Nome do metadata" value="' + escapeHtml(rowData.name || '') + '">',
+            '<input type="text" class="bulk-metadata-input" placeholder="Caminho relativo do metadata (ex.: force-app/main/default/objects/Case/fields/HasNegotiation__c.field-meta.xml)" value="' + escapeHtml(rowData.name || '') + '">',
             '<select class="bulk-metadata-type-select">' + buildMetadataTypeOptions(rowData.typeId) + '</select>',
             '<select class="bulk-change-type-select">' + buildChangeTypeOptions(rowData.changeType) + '</select>',
             '<button type="button" class="btn-icon-danger bulk-remove-btn" title="Remover linha">\u00d7</button>'
@@ -625,6 +712,15 @@
         if (el.fRepoSelect) el.fRepoSelect.innerHTML = html;
         if (el.scanRepoSelect) el.scanRepoSelect.innerHTML = html;
         if (el.authorScanRepoSelect) el.authorScanRepoSelect.innerHTML = html;
+
+        // Scan PRs usa id do repo (não o path)
+        if (el.scanPrsRepoSelect) {
+            const prOpts = ['<option value="">Selecione um repositório</option>'];
+            state.repos.forEach(function(repo) {
+                prOpts.push('<option value="' + escapeHtml(String(repo.id)) + '">' + escapeHtml(repo.name) + '</option>');
+            });
+            el.scanPrsRepoSelect.innerHTML = prOpts.join('');
+        }
     }
 
     function isEmailInPeople(email) {
@@ -1805,8 +1901,432 @@
         });
     }
 
+    // ── PR Branch Search ──────────────────────────────────────────────────────
+    function extractBranchFromUrl(url) {
+        try {
+            const urlObj = new URL(url);
+            const hostname = urlObj.hostname.toLowerCase();
+            const pathname = urlObj.pathname.toLowerCase();
+
+            // GitHub: https://github.com/owner/repo/pull/123/...
+            if (hostname.includes('github.com')) {
+                const match = pathname.match(/\/compare\/([^/?]+)(?:\.\.|$)/);
+                if (match) return match[1];
+                const match2 = pathname.match(/\/pull\/(\d+)\/[^/]*\/([^/?]+)$/);
+                if (match2) return match2[2];
+                return null;
+            }
+
+            // GitLab: https://gitlab.com/owner/repo/-/merge_requests/123/diffs?view=parallel
+            if (hostname.includes('gitlab.com')) {
+                const match = pathname.match(/merge_requests\/\d+[/?]/);
+                if (match) {
+                    const paramsMatch = url.match(/from_project_id=\d+&source_branch=([^&]+)/);
+                    if (paramsMatch) return decodeURIComponent(paramsMatch[1]);
+                }
+                return null;
+            }
+
+            // Bitbucket: https://bitbucket.org/owner/repo/pullrequests/123/...
+            if (hostname.includes('bitbucket.org')) {
+                const match = pathname.match(/pullrequests\/\d+[/?]/);
+                if (match) {
+                    const paramsMatch = url.match(/source\/branch%3D([^&]+)/);
+                    if (paramsMatch) return decodeURIComponent(paramsMatch[1]);
+                }
+                return null;
+            }
+
+            return null;
+        } catch {
+            return null;
+        }
+    }
+
+    function filterPrsByBranches(prs, branches) {
+        const targetBranches = branches
+            .map(b => (String(b || '').trim()).toLowerCase())
+            .filter(Boolean);
+
+        if (targetBranches.length === 0) {
+            return {};
+        }
+
+        const grouped = {};
+        prs.forEach(pr => {
+            const branch = extractBranchFromUrl(pr.url);
+            const normalizedBranch = branch ? branch.toLowerCase() : null;
+
+            if (normalizedBranch && targetBranches.includes(normalizedBranch)) {
+                if (!grouped[normalizedBranch]) {
+                    grouped[normalizedBranch] = pr;
+                } else {
+                    const existing = grouped[normalizedBranch];
+                    const existingDate = new Date(existing.created_at || 0);
+                    const newDate = new Date(pr.created_at || 0);
+                    if (newDate > existingDate) {
+                        grouped[normalizedBranch] = pr;
+                    }
+                }
+            }
+        });
+
+        return grouped;
+    }
+
+    function renderPrBranchResults(grouped) {
+        const branches = Object.keys(grouped).sort();
+        el.prBranchResultsSection.hidden = branches.length === 0;
+        el.prBranchCountLabel.textContent = branches.length + ' branch' + (branches.length === 1 ? '' : 'es');
+
+        if (branches.length === 0) {
+            el.prBranchResultsContainer.innerHTML = '<p style="padding: 16px; text-align: center; color: var(--muted);">Nenhum PR encontrado para as branches informadas.</p>';
+            return;
+        }
+
+        el.prBranchResultsContainer.innerHTML = branches.map(function(branch) {
+            const pr = grouped[branch];
+            return [
+                '<div style="border-bottom: 1px solid var(--line); padding: 16px 0;">',
+                '  <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;">',
+                '    <div style="flex: 1; min-width: 0;">',
+                '      <div style="font-size: 0.875rem; color: var(--muted); margin-bottom: 4px;">Branch</div>',
+                '      <div style="font-weight: 600; font-family: monospace; word-break: break-all;">' + escapeHtml(branch) + '</div>',
+                '      <div style="font-size: 0.875rem; color: var(--muted); margin-top: 8px;">PR</div>',
+                '      <a href="' + escapeHtml(pr.url) + '" target="_blank" style="color: var(--primary); text-decoration: none; word-break: break-all;">',
+                '        ' + escapeHtml(pr.label) + '',
+                '      </a>',
+                '      <div style="font-size: 0.875rem; color: var(--muted); margin-top: 8px;">Data</div>',
+                '      <div>' + escapeHtml(formatDateTime(pr.created_at)) + '</div>',
+                '    </div>',
+                '  </div>',
+                '</div>'
+            ].join('');
+        }).join('');
+    }
+
+    async function searchPrByBranch() {
+        el.prBranchError.hidden = true;
+        el.prBranchError.textContent = '';
+        el.prBranchInfo.hidden = true;
+        el.prBranchInfo.textContent = '';
+
+        if (!state.prBranchSelectedMetadata) {
+            el.prBranchError.hidden = false;
+            el.prBranchError.textContent = 'Selecione um metadata.';
+            el.prBranchMetadataSearch.focus();
+            return;
+        }
+
+        const branches = Array.from(document.querySelectorAll('.branch-input'))
+            .map(input => input.value.trim())
+            .filter(Boolean);
+
+        if (branches.length === 0) {
+            el.prBranchError.hidden = false;
+            el.prBranchError.textContent = 'Informe pelo menos uma branch.';
+            return;
+        }
+
+        el.btnSearchPrBranch.disabled = true;
+        const prevText = el.btnSearchPrBranch.textContent;
+        el.btnSearchPrBranch.textContent = 'Buscando...';
+        el.prBranchInfo.hidden = false;
+        el.prBranchInfo.textContent = 'Buscando PRs...';
+
+        try {
+            const metadata = await api.get('/api/metadatas?q=' + encodeURIComponent(state.prBranchSelectedMetadata.metadata_name));
+            const allPrs = Array.isArray(metadata) && metadata.length > 0 ? metadata[0].prs : [];
+
+            if (!Array.isArray(allPrs) || allPrs.length === 0) {
+                el.prBranchInfo.textContent = 'Nenhum PR vinculado ao metadata selecionado.';
+                renderPrBranchResults({});
+                return;
+            }
+
+            const grouped = filterPrsByBranches(allPrs, branches);
+            const matchedCount = Object.keys(grouped).length;
+
+            if (matchedCount === 0) {
+                el.prBranchInfo.textContent = 'Nenhum PR encontrado para as branches informadas.';
+            } else {
+                el.prBranchInfo.textContent = matchedCount + ' branch' + (matchedCount === 1 ? '' : 'es') + ' com PR encontrada' + (matchedCount === 1 ? '' : 's') + '.';
+            }
+
+            renderPrBranchResults(grouped);
+        } catch (err) {
+            el.prBranchError.hidden = false;
+            el.prBranchError.textContent = 'Erro ao buscar PRs: ' + err.message;
+            el.prBranchInfo.hidden = true;
+        } finally {
+            el.btnSearchPrBranch.disabled = false;
+            el.btnSearchPrBranch.textContent = prevText;
+        }
+    }
+
+    function initScanPrs() {
+        if (el.tabBtnScanPrs) {
+            el.tabBtnScanPrs.addEventListener('click', function() {
+                setActiveTab('scan-prs');
+            });
+        }
+        if (el.scanPrsForm) {
+            el.scanPrsForm.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                await runScanPrs();
+            });
+        }
+        if (el.btnScanPrsSelectAll) {
+            el.btnScanPrsSelectAll.addEventListener('click', function() {
+                el.scanPrsResultsContainer.querySelectorAll('input[type=checkbox]').forEach(function(cb) { cb.checked = true; });
+            });
+        }
+        if (el.btnScanPrsDeselectAll) {
+            el.btnScanPrsDeselectAll.addEventListener('click', function() {
+                el.scanPrsResultsContainer.querySelectorAll('input[type=checkbox]').forEach(function(cb) { cb.checked = false; });
+            });
+        }
+        if (el.btnSaveScannedPrs) {
+            el.btnSaveScannedPrs.addEventListener('click', async function() {
+                await saveScannedPrs();
+            });
+        }
+    }
+
+    async function runScanPrs() {
+        const repoId = Number(el.scanPrsRepoSelect.value);
+        if (!repoId) {
+            el.scanPrsError.hidden = false;
+            el.scanPrsError.textContent = 'Selecione um repositório';
+            return;
+        }
+        el.scanPrsError.hidden = true;
+        el.scanPrsInfo.hidden = false;
+        el.scanPrsInfo.textContent = 'Varrendo merge commits...';
+        el.btnScanPrs.disabled = true;
+        el.scanPrsResultsSection.hidden = true;
+        el.scanPrsSaveInfo.hidden = true;
+        try {
+            const sinceDays = Math.max(1, Number(el.scanPrsSinceDays.value) || 90);
+            const branchFilter = String(el.scanPrsBranchFilter?.value || '').trim();
+            const authorFilter = String(el.scanPrsAuthorFilter?.value || '').trim();
+            const result = await api.post('/api/repos/' + repoId + '/scan-prs', {
+                since_days: sinceDays,
+                branch_filter: branchFilter,
+                author_filter: authorFilter
+            });
+            state.scanPrResults = result.matches || [];
+            state.scanPrRepoId = repoId;
+            el.scanPrsInfo.hidden = true;
+            if (state.scanPrResults.length === 0) {
+                el.scanPrsError.hidden = false;
+                el.scanPrsError.textContent = 'Nenhum match encontrado. ' + (result.total_prs || 0) + ' merge commit(s) analisado(s) no período.';
+                return;
+            }
+            el.scanPrsCountLabel.textContent = result.total_prs + ' PR(s) analisada(s) · ' + result.total_matches + ' match(es)';
+            renderScanPrsResults(state.scanPrResults);
+            el.scanPrsResultsSection.hidden = false;
+        } catch (err) {
+            el.scanPrsInfo.hidden = true;
+            el.scanPrsError.hidden = false;
+            el.scanPrsError.textContent = err.message || 'Erro ao varrer PRs';
+        } finally {
+            el.btnScanPrs.disabled = false;
+        }
+    }
+
+    function renderScanPrsResults(matches) {
+        if (!matches.length) {
+            el.scanPrsResultsContainer.innerHTML = '<p style="color:var(--muted)">Nenhum match encontrado.</p>';
+            return;
+        }
+        // Agrupar por PR
+        const byPr = new Map();
+        for (const m of matches) {
+            if (!byPr.has(m.pr_number)) byPr.set(m.pr_number, []);
+            byPr.get(m.pr_number).push(m);
+        }
+        let html = '';
+        let idx = 0;
+        for (const [prNumber, items] of byPr) {
+            const prUrl = items[0].pr_url || '';
+            const branch = items[0].source_branch || '';
+            const authorName = items[0].pr_author_name || '';
+            const authorEmail = items[0].pr_author_email || '';
+            const authorLabel = authorName || authorEmail;
+            html += '<div style="border:1px solid var(--line);border-radius:6px;margin-bottom:12px;overflow:hidden;">';
+            html += '<div style="padding:10px 14px;background:var(--bg-alt);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">';
+            html += '<strong>PR #' + escapeHtml(prNumber) + '</strong>';
+            if (prUrl) html += ' <a href="' + escapeHtml(prUrl) + '" target="_blank" rel="noopener" style="font-size:0.8rem;color:var(--primary);">Abrir</a>';
+            html += ' <span style="font-size:0.8rem;color:var(--muted);">branch: ' + escapeHtml(branch) + '</span>';
+            if (authorLabel) {
+                html += ' <span style="font-size:0.8rem;color:var(--muted);">autor: ' + escapeHtml(authorLabel) + '</span>';
+            }
+            html += '</div>';
+            for (const m of items) {
+                html += '<label style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--line);cursor:pointer;">';
+                html += '<input type="checkbox" class="scan-pr-checkbox" data-idx="' + idx + '" checked>';
+                html += '<span style="flex:1;font-size:0.875rem;">' + escapeHtml(m.metadata_name) + '</span>';
+                if (!prUrl) {
+                    html += '<input type="text" data-idx="' + idx + '" class="scan-pr-url-input" placeholder="URL da PR (obrigatório)" style="flex:1;min-width:180px;font-size:0.8rem;padding:3px 6px;">';
+                }
+                html += '</label>';
+                idx++;
+            }
+            html += '</div>';
+        }
+        el.scanPrsResultsContainer.innerHTML = html;
+    }
+
+    async function saveScannedPrs() {
+        const checkboxes = el.scanPrsResultsContainer.querySelectorAll('.scan-pr-checkbox:checked');
+        if (checkboxes.length === 0) {
+            el.scanPrsSaveInfo.hidden = false;
+            el.scanPrsSaveInfo.className = 'form-error';
+            el.scanPrsSaveInfo.textContent = 'Nenhum item selecionado.';
+            return;
+        }
+        const toSave = [];
+        for (const cb of checkboxes) {
+            const idx = Number(cb.dataset.idx);
+            const match = state.scanPrResults[idx];
+            if (!match) continue;
+            let prUrl = match.pr_url;
+            if (!prUrl) {
+                const urlInput = el.scanPrsResultsContainer.querySelector('.scan-pr-url-input[data-idx="' + idx + '"]');
+                prUrl = urlInput ? String(urlInput.value || '').trim() : '';
+            }
+            if (!prUrl) continue;
+            toSave.push({ pr_number: match.pr_number, metadata_id: match.metadata_id, pr_url: prUrl });
+        }
+        if (toSave.length === 0) {
+            el.scanPrsSaveInfo.hidden = false;
+            el.scanPrsSaveInfo.className = 'form-error';
+            el.scanPrsSaveInfo.textContent = 'Nenhum item com URL válida para salvar.';
+            return;
+        }
+        el.btnSaveScannedPrs.disabled = true;
+        el.scanPrsSaveInfo.hidden = true;
+        try {
+            const result = await api.post('/api/repos/' + state.scanPrRepoId + '/save-scanned-prs', { matches: toSave });
+            el.scanPrsSaveInfo.hidden = false;
+            el.scanPrsSaveInfo.className = 'form-info';
+            el.scanPrsSaveInfo.textContent = result.saved + ' PR(s) salva(s).' + (result.skipped ? ' ' + result.skipped + ' ignorada(s) (duplicata ou inválida).' : '');
+            await loadItems();
+        } catch (err) {
+            el.scanPrsSaveInfo.hidden = false;
+            el.scanPrsSaveInfo.className = 'form-error';
+            el.scanPrsSaveInfo.textContent = err.message || 'Erro ao salvar';
+        } finally {
+            el.btnSaveScannedPrs.disabled = false;
+        }
+    }
+
+    function initPrBranchSearch() {
+        // Metadata search dropdown
+        if (el.prBranchMetadataSearch) {
+            let dropdownTimeout;
+            el.prBranchMetadataSearch.addEventListener('input', function() {
+                clearTimeout(dropdownTimeout);
+                const query = String(this.value || '').toLowerCase().trim();
+
+                if (query.length < 2) {
+                    el.prMetadataDropdown.hidden = true;
+                    return;
+                }
+
+                dropdownTimeout = setTimeout(async function() {
+                    try {
+                        const results = await api.get('/api/metadatas?q=' + encodeURIComponent(query));
+                        const items = Array.isArray(results) ? results : [];
+
+                        if (items.length === 0) {
+                            el.prMetadataDropdown.innerHTML = '<div style="padding: 8px; color: var(--muted);">Nenhum resultado</div>';
+                            el.prMetadataDropdown.hidden = false;
+                            return;
+                        }
+
+                        el.prMetadataDropdown.innerHTML = items.slice(0, 10).map(function(item, idx) {
+                            return [
+                                '<div class="dropdown-item" data-index="' + idx + '" style="padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--line); transition: background 0.15s;">',
+                                '  <div style="font-weight: 500;">' + escapeHtml(item.metadata_name) + '</div>',
+                                '  <div style="font-size: 0.75rem; color: var(--muted);">' + escapeHtml(item.front || '') + (item.sprint ? ' / ' + escapeHtml(item.sprint) : '') + '</div>',
+                                '</div>'
+                            ].join('');
+                        }).join('');
+
+                        el.prMetadataDropdown.hidden = false;
+
+                        el.prMetadataDropdown.querySelectorAll('.dropdown-item').forEach(function(itemEl) {
+                            itemEl.addEventListener('click', function() {
+                                const idx = Number(itemEl.dataset.index);
+                                state.prBranchSelectedMetadata = items[idx];
+                                el.prBranchMetadataSearch.value = items[idx].metadata_name;
+                                el.prMetadataDropdown.hidden = true;
+                                el.prMetadataSelected.hidden = false;
+                                el.prMetadataSelectedName.textContent = items[idx].metadata_name;
+                            });
+                        });
+                    } catch (err) {
+                        el.prMetadataDropdown.innerHTML = '<div style="padding: 8px; color: red;">Erro: ' + escapeHtml(err.message) + '</div>';
+                        el.prMetadataDropdown.hidden = false;
+                    }
+                }, 300);
+            });
+
+            document.addEventListener('click', function(e) {
+                if (!el.prBranchMetadataSearch.contains(e.target) && !el.prMetadataDropdown.contains(e.target)) {
+                    el.prMetadataDropdown.hidden = true;
+                }
+            });
+        }
+
+        // Clear metadata selection
+        if (el.btnClearPrMetadata) {
+            el.btnClearPrMetadata.addEventListener('click', function(e) {
+                e.preventDefault();
+                state.prBranchSelectedMetadata = null;
+                el.prBranchMetadataSearch.value = '';
+                el.prMetadataSelected.hidden = true;
+                el.prMetadataDropdown.hidden = true;
+                el.prBranchMetadataSearch.focus();
+            });
+        }
+
+        // Add branch input
+        if (el.btnAddBranch) {
+            el.btnAddBranch.addEventListener('click', function(e) {
+                e.preventDefault();
+                const currentCount = document.querySelectorAll('.branch-input').length;
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'branch-input';
+                input.placeholder = 'Ex.: develop';
+                input.dataset.index = currentCount;
+                el.prBranchesList.appendChild(input);
+                input.focus();
+            });
+        }
+
+        // Form submit
+        if (el.prBranchForm) {
+            el.prBranchForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                searchPrByBranch();
+            });
+        }
+
+        // Tab button
+        if (el.tabBtnPrBranch) {
+            el.tabBtnPrBranch.addEventListener('click', function() {
+                setActiveTab('pr-branch');
+            });
+        }
+    }
+
     // ── Init ──────────────────────────────────────────────────────────────────
     async function init() {
+        initThemeToggle();
         ensureBulkRows();
         setActiveTab('metadata');
         resetPersonForm();
@@ -1838,6 +2358,8 @@
         fillSelect(el.metadataFilterSprint, sprints, 'Todas as sprints', '');
         
         bindEvents();
+        initPrBranchSearch();
+        initScanPrs();
         await loadItems();
     }
 

@@ -14,6 +14,41 @@
     --radius-lg: 24px;
     --radius-md: 16px;
     --radius-sm: 12px;
+    --bg-spot-a: rgba(203, 107, 42, 0.2);
+    --bg-spot-b: rgba(15, 107, 77, 0.2);
+    --bg-gradient-top: #f7fbf8;
+    --grid-line: rgba(10, 74, 53, 0.05);
+    --grid-mask-top: rgba(0, 0, 0, 0.42);
+    --hero-grad-a: rgba(255, 255, 255, 0.95);
+    --hero-grad-b: rgba(225, 237, 229, 0.88);
+    --card-surface: rgba(255, 255, 255, 0.78);
+    --card-soft: rgba(15, 107, 77, 0.08);
+    --card-empty: rgba(255, 255, 255, 0.55);
+}
+
+:root[data-theme="dark"] {
+    --bg: #0f1512;
+    --bg-strong: #17201b;
+    --surface: rgba(23, 32, 27, 0.86);
+    --surface-strong: #1d2822;
+    --text: #e8f3ec;
+    --muted: #9fb9ad;
+    --line: rgba(232, 243, 236, 0.16);
+    --primary: #4ac08d;
+    --primary-strong: #2d8f66;
+    --accent: #e89f56;
+    --danger: #e07474;
+    --shadow: 0 24px 52px rgba(0, 0, 0, 0.45);
+    --bg-spot-a: rgba(232, 159, 86, 0.12);
+    --bg-spot-b: rgba(74, 192, 141, 0.12);
+    --bg-gradient-top: #121915;
+    --grid-line: rgba(232, 243, 236, 0.03);
+    --grid-mask-top: rgba(0, 0, 0, 0.7);
+    --hero-grad-a: rgba(28, 39, 33, 0.95);
+    --hero-grad-b: rgba(20, 28, 24, 0.9);
+    --card-surface: rgba(29, 40, 34, 0.94);
+    --card-soft: rgba(74, 192, 141, 0.12);
+    --card-empty: rgba(29, 40, 34, 0.78);
 }
 
 * {
@@ -26,9 +61,9 @@ body {
     color: var(--text);
     font-family: "Instrument Sans", sans-serif;
     background:
-        radial-gradient(circle at 8% 8%, rgba(203, 107, 42, 0.2), transparent 20%),
-        radial-gradient(circle at 88% 10%, rgba(15, 107, 77, 0.2), transparent 24%),
-        linear-gradient(180deg, #f7fbf8 0%, var(--bg) 100%);
+        radial-gradient(circle at 8% 8%, var(--bg-spot-a), transparent 20%),
+        radial-gradient(circle at 88% 10%, var(--bg-spot-b), transparent 24%),
+        linear-gradient(180deg, var(--bg-gradient-top) 0%, var(--bg) 100%);
 }
 
 body::before {
@@ -37,10 +72,28 @@ body::before {
     inset: 0;
     pointer-events: none;
     background-image:
-        linear-gradient(rgba(10, 74, 53, 0.05) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(10, 74, 53, 0.05) 1px, transparent 1px);
+        linear-gradient(var(--grid-line) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
     background-size: 26px 26px;
-    mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.42), transparent 72%);
+    mask-image: linear-gradient(180deg, var(--grid-mask-top), transparent 72%);
+}
+
+.hero-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.theme-toggle {
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface-strong);
+    color: var(--text);
+    padding: 8px 12px;
+    font-size: 0.86rem;
+    font-weight: 600;
+    white-space: nowrap;
 }
 
 .page-shell {
@@ -55,7 +108,7 @@ body::before {
     border-radius: var(--radius-lg);
     padding: 34px;
     margin-bottom: 20px;
-    background: linear-gradient(130deg, rgba(255, 255, 255, 0.95), rgba(225, 237, 229, 0.88));
+    background: linear-gradient(130deg, var(--hero-grad-a), var(--hero-grad-b));
     box-shadow: var(--shadow);
 }
 
@@ -262,7 +315,7 @@ button:hover {
 .item-card {
     border: 1px solid var(--line);
     border-radius: 14px;
-    background: rgba(255, 255, 255, 0.75);
+    background: var(--card-surface);
     padding: 14px;
     display: grid;
     gap: 10px;
@@ -350,7 +403,7 @@ button:hover {
     display: flex;
     align-items: center;
     gap: 8px;
-    background: rgba(15, 107, 77, 0.06);
+    background: var(--card-soft);
     border-radius: 8px;
     padding: 7px 10px;
 }
@@ -405,7 +458,7 @@ button:hover {
     gap: 8px;
     align-items: center;
     flex-wrap: wrap;
-    background: rgba(15, 107, 77, 0.04);
+    background: var(--card-soft);
     border: 1px dashed rgba(15, 107, 77, 0.25);
     border-radius: 10px;
     padding: 10px;
@@ -426,7 +479,7 @@ button:hover {
 .empty-state {
     border: 1px dashed rgba(20, 32, 25, 0.24);
     border-radius: var(--radius-sm);
-    background: rgba(255, 255, 255, 0.5);
+    background: var(--card-empty);
     color: var(--muted);
     padding: 18px;
 }
@@ -819,7 +872,71 @@ button:hover {
     white-space: nowrap;
 }
 
-    .commit-import-grid {
+/* ── PR Branch Search ────────────────────────────────────────────────────── */
+
+.dropdown-list {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    background: var(--surface-strong);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow);
+    margin-top: 4px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.dropdown-item {
+    padding: 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+    border-bottom: 1px solid var(--line);
+}
+
+.dropdown-item:hover {
+    background: var(--bg);
+}
+
+.dropdown-item:last-child {
+    border-bottom: none;
+}
+
+.metadata-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(15, 107, 77, 0.08);
+    border: 1px solid var(--primary);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+    font-size: 0.92rem;
+    margin-bottom: 12px;
+}
+
+.branches-input-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.branch-input {
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    font-size: 0.92rem;
+    font-family: "Instrument Sans", sans-serif;
+}
+
+.branch-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(15, 107, 77, 0.1);
+}
+
+@media (max-width: 980px) {
         grid-template-columns: 1fr;
     }
 

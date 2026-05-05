@@ -12,7 +12,12 @@
 <body>
     <div class="page-shell">
         <header class="hero">
-            <p class="eyebrow">Operacoes de entrega</p>
+            <div class="hero-top">
+                <p class="eyebrow">Operacoes de entrega</p>
+                <button id="btn-theme-toggle" class="theme-toggle" type="button" aria-label="Alternar tema" title="Alternar tema">
+                    🔦 Tema escuro
+                </button>
+            </div>
             <h1>Gerador de release notes</h1>
             <p class="hero-copy">
                 Cadastre metadados Salesforce por frente e sprint, filtre por contexto e gere um texto de release
@@ -25,6 +30,8 @@
             <button id="tab-btn-release" class="tab-switch" type="button" role="tab" aria-selected="false">Gerar release notes</button>
             <button id="tab-btn-commits" class="tab-switch" type="button" role="tab" aria-selected="false">Busca por commit</button>
             <button id="tab-btn-authors" class="tab-switch" type="button" role="tab" aria-selected="false">Autores de commits</button>
+            <button id="tab-btn-pr-branch" class="tab-switch" type="button" role="tab" aria-selected="false">Buscar PRs por branch</button>
+            <button id="tab-btn-scan-prs" class="tab-switch" type="button" role="tab" aria-selected="false">Varrer PRs do git</button>
         </section>
 
         <section id="tab-pane-metadata" class="tab-pane">
@@ -65,7 +72,7 @@
                             <span>Importar metadados por commit</span>
                             <div class="commit-import-grid">
                                 <div class="repo-path-wrap">
-                                    <input id="f-repo-path" type="text" placeholder="Caminho local do repositorio git (ex.: C:/repos/salesforce)">
+                                    <input id="f-repo-path" type="text" placeholder="Caminho local do repositorio git (ex.: C:/repos/meu-repo)">
                                     <select id="f-repo-select" title="Usar repositorio salvo">
                                         <option value="">Repo salvo...</option>
                                     </select>
@@ -135,7 +142,7 @@
                         </label>
                         <label class="field">
                             <span>Caminho local *</span>
-                            <input id="f-repo-path-save" type="text" placeholder="C:/repos/salesforce">
+                            <input id="f-repo-path-save" type="text" placeholder="C:/repos/meu-repo">
                         </label>
                     </div>
                     <div id="repo-form-error" class="form-error" hidden></div>
@@ -255,7 +262,7 @@
 
                         <label class="field field-full">
                             <span>Repositorio padrao (opcional)</span>
-                            <input id="person-default-repo" type="text" placeholder="C:/repos/salesforce">
+                            <input id="person-default-repo" type="text" placeholder="C:/repos/meu-repo">
                         </label>
                     </div>
 
@@ -293,7 +300,7 @@
                         <label class="field field-full">
                             <span>Caminho do repositorio *</span>
                             <div class="repo-path-wrap">
-                                <input id="scan-repo-path" type="text" required placeholder="C:/repos/salesforce">
+                                <input id="scan-repo-path" type="text" required placeholder="C:/repos/meu-repo">
                                 <select id="scan-repo-select" title="Usar repositorio salvo">
                                     <option value="">Repo salvo...</option>
                                 </select>
@@ -359,7 +366,7 @@
                         <label class="field field-full">
                             <span>Caminho do repositorio *</span>
                             <div class="repo-path-wrap">
-                                <input id="author-scan-repo-path" type="text" required placeholder="C:/repos/salesforce">
+                                <input id="author-scan-repo-path" type="text" required placeholder="C:/repos/meu-repo">
                                 <select id="author-scan-repo-select" title="Usar repositorio salvo">
                                     <option value="">Repo salvo...</option>
                                 </select>
@@ -411,6 +418,120 @@
                         <tbody id="author-results-body"></tbody>
                     </table>
                 </div>
+            </section>
+        </section>
+
+        <section id="tab-pane-pr-branch" class="tab-pane" hidden>
+            <section class="panel form-panel">
+                <div class="section-head">
+                    <h2>Buscar PRs por branch</h2>
+                </div>
+
+                <form id="pr-branch-form" novalidate autocomplete="off">
+                    <div class="form-grid">
+                        <label class="field field-full">
+                            <span>Selecione o metadata *</span>
+                            <input id="pr-branch-metadata-search" type="text" placeholder="Buscar por nome do metadata..." required>
+                            <div id="pr-metadata-dropdown" class="dropdown-list" hidden>
+                                <!-- Preenchido dinamicamente -->
+                            </div>
+                        </label>
+
+                        <div id="pr-metadata-selected" class="metadata-badge" hidden>
+                            <strong id="pr-metadata-selected-name"></strong>
+                            <button type="button" id="btn-clear-pr-metadata" class="btn-secondary btn-sm">Limpar</button>
+                        </div>
+
+                        <label class="field field-full">
+                            <span>Branches *</span>
+                            <div id="pr-branches-list" class="branches-input-list">
+                                <input type="text" class="branch-input" placeholder="Ex.: main" data-index="0">
+                            </div>
+                            <button type="button" id="btn-add-branch" class="btn-secondary btn-sm" style="margin-top: 8px;">+ Adicionar branch</button>
+                        </label>
+                    </div>
+
+                    <div id="pr-branch-error" class="form-error" hidden></div>
+                    <div id="pr-branch-info" class="form-info" hidden></div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn-primary" id="btn-search-pr-branch">Buscar PRs</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="panel list-panel" id="pr-branch-results-section" hidden>
+                <div class="section-head">
+                    <h2>PRs encontrados</h2>
+                    <strong id="pr-branch-count-label">0 branches</strong>
+                </div>
+
+                <div id="pr-branch-results-container">
+                    <!-- Preenchido dinamicamente -->
+                </div>
+            </section>
+        </section>
+
+        <section id="tab-pane-scan-prs" class="tab-pane" hidden>
+            <section class="panel form-panel">
+                <div class="section-head">
+                    <h2>Varrer PRs do git</h2>
+                </div>
+
+                <form id="scan-prs-form" novalidate autocomplete="off">
+                    <div class="form-grid">
+                        <label class="field">
+                            <span>Repositório *</span>
+                            <select id="scan-prs-repo-select"></select>
+                        </label>
+
+                        <label class="field">
+                            <span>Período (dias para trás)</span>
+                            <input id="scan-prs-since-days" type="number" min="1" max="3650" value="90" placeholder="90">
+                        </label>
+
+                        <label class="field">
+                            <span>Filtrar por branch (opcional)</span>
+                            <input id="scan-prs-branch-filter" type="text" placeholder="Ex.: forno, main, SWSS-1721">
+                        </label>
+
+                        <label class="field">
+                            <span>Filtrar por autor (opcional)</span>
+                            <input id="scan-prs-author-filter" type="text" placeholder="Nome ou email do autor do merge commit">
+                        </label>
+                    </div>
+
+                    <div id="scan-prs-error" class="form-error" hidden></div>
+                    <div id="scan-prs-info" class="form-info" hidden></div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn-primary" id="btn-scan-prs">Varrer merge commits</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="panel list-panel" id="scan-prs-results-section" hidden>
+                <div class="section-head">
+                    <h2>Matches encontrados</h2>
+                    <strong id="scan-prs-count-label"></strong>
+                </div>
+
+                <p style="color: var(--muted); margin: 0 0 12px; font-size: 0.875rem;">
+                    Marque os vínculos que deseja salvar. PRs já cadastrados para o mesmo metadata serão ignorados automaticamente.
+                </p>
+
+                <div style="margin-bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+                    <button type="button" id="btn-scan-prs-select-all" class="btn-secondary btn-sm">Marcar todos</button>
+                    <button type="button" id="btn-scan-prs-deselect-all" class="btn-secondary btn-sm">Desmarcar todos</button>
+                </div>
+
+                <div id="scan-prs-results-container"></div>
+
+                <div class="form-actions" style="margin-top: 16px;">
+                    <button type="button" id="btn-save-scanned-prs" class="btn-primary">Salvar selecionados</button>
+                </div>
+
+                <div id="scan-prs-save-info" class="form-info" hidden></div>
             </section>
         </section>
 

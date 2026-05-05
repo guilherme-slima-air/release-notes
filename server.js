@@ -137,6 +137,12 @@ const moveMetadataPullRequests = db.prepare(`
 `);
 
 const deleteMetadataById = db.prepare('DELETE FROM metadatas WHERE id = ?');
+const updateMetadataNameById = db.prepare('UPDATE metadatas SET metadata_name = ? WHERE id = ?');
+const selectAllMetadatasForMigration = db.prepare(`
+    SELECT m.id, m.front_id, m.sprint_id, m.metadata_type_id, m.metadata_name, m.created_at, mt.name AS metadata_type_name
+    FROM metadatas m
+    JOIN metadata_types mt ON mt.id = m.metadata_type_id
+`);
 
 const selectDuplicatePullRequestGroups = db.prepare(`
     SELECT
@@ -208,8 +214,78 @@ function consolidateDuplicatePullRequests() {
     }
 }
 
-consolidateDuplicateMetadatas();
-consolidateDuplicatePullRequests();
+function migrateLegacyMetadataNames() {
+    const rows = selectAllMetadatasForMigration.all();
+    if (!rows.length) {
+        return;
+    }
+
+    const grouped = new Map();
+
+    rows.forEach(row => {
+        const normalizedName = normalizeMetadataNameByType(row.metadata_name, row.metadata_type_name);
+        if (!normalizedName) {
+            return;
+        }
+
+        const key = [
+            Number(row.front_id),
+            row.sprint_id == null ? 'NULL' : Number(row.sprint_id),
+            Number(row.metadata_type_id),
+            normalizedName.toLowerCase()
+        ].join('|');
+
+        if (!grouped.has(key)) {
+            grouped.set(key, []);
+        }
+
+        grouped.get(key).push({
+            id: row.id,
+            metadata_name: String(row.metadata_name || ''),
+            normalized_name: normalizedName,
+            created_at: String(row.created_at || '')
+        });
+    });
+
+    let updatedCount = 0;
+    let mergedCount = 0;
+
+    grouped.forEach(groupRows => {
+        if (!groupRows.length) {
+            return;
+        }
+
+        groupRows.sort((a, b) => {
+            const timeA = Date.parse(a.created_at || '');
+            const timeB = Date.parse(b.created_at || '');
+
+            if (!Number.isNaN(timeA) && !Number.isNaN(timeB) && timeB !== timeA) {
+                return timeB - timeA;
+            }
+            return String(b.id).localeCompare(String(a.id), 'pt-BR');
+        });
+
+        const canonical = groupRows[0];
+
+        if (canonical.metadata_name !== canonical.normalized_name) {
+            updateMetadataNameById.run(canonical.normalized_name, canonical.id);
+            updatedCount += 1;
+        }
+
+        groupRows.slice(1).forEach(duplicate => {
+            moveMetadataPullRequests.run(canonical.id, duplicate.id);
+            deleteMetadataById.run(duplicate.id);
+            mergedCount += 1;
+        });
+    });
+
+    if (updatedCount > 0) {
+        console.log(`  [migrate] ${updatedCount} metadata(s) atualizado(s) para caminho relativo padronizado`);
+    }
+    if (mergedCount > 0) {
+        console.log(`  [migrate] ${mergedCount} metadata(s) legado(s) consolidado(s) apos padronizacao`);
+    }
+}
 
 db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_metadatas_unique_context
@@ -281,6 +357,7 @@ const selectFrontById = db.prepare('SELECT id FROM fronts WHERE id = ?');
 const selectSprintById = db.prepare('SELECT id FROM sprints WHERE id = ?');
 const selectSprintByIdAndFront = db.prepare('SELECT id FROM sprints WHERE id = ? AND front_id = ?');
 const selectMetadataTypeById = db.prepare('SELECT id FROM metadata_types WHERE id = ?');
+const selectMetadataTypeRecordById = db.prepare('SELECT id, name FROM metadata_types WHERE id = ?');
 const selectMetadataById = db.prepare('SELECT id FROM metadatas WHERE id = ?');
 
 const METADATA_TYPE_ALIAS = {
@@ -358,6 +435,173 @@ function parsePositiveInt(value) {
 
 function normalizeText(value) {
     return String(value ?? '').trim();
+}
+
+function normalizeMetadataName(value) {
+    const normalized = normalizeText(value)
+        .replace(/\\/g, '/')
+        .replace(/\/+/g, '/')
+        .replace(/^\.\//, '')
+        .replace(/^\/+/, '')
+        .replace(/\/+$/, '');
+
+    if (!normalized) return '';
+
+    const forceAppIndex = normalized.toLowerCase().indexOf('force-app/');
+    if (forceAppIndex >= 0) {
+        return normalized.slice(forceAppIndex);
+    }
+
+    return normalized;
+}
+
+function appendMetadataSuffix(filename, suffix) {
+    const normalized = normalizeMetadataName(filename);
+    if (!normalized) return '';
+    if (normalized.toLowerCase().endsWith(String(suffix || '').toLowerCase())) {
+        return normalized;
+    }
+    return normalized + suffix;
+}
+
+function joinMetadataPath(relativePath) {
+    const normalized = normalizeMetadataName(relativePath);
+    if (!normalized || normalized === '.forceignore') {
+        return normalized;
+    }
+    if (normalized.toLowerCase().startsWith('force-app/')) {
+        return normalized;
+    }
+    return 'force-app/main/default/' + normalized;
+}
+
+function normalizeMetadataNameByType(value, typeName) {
+    const normalized = normalizeMetadataName(value);
+    if (!normalized) return '';
+
+    const lower = normalized.toLowerCase();
+    if (normalized === '.forceignore' || lower.startsWith('force-app/')) {
+        return normalized;
+    }
+
+    if (/^(classes|triggers|flows|lwc|permissionsetgroups|permissionsets|profiles|objects|layouts|flexipages|queues|quickactions|pathassistants|milestonetypes|globalvaluesets|compactlayouts|standardvaluesets|applications|settings|skills|custommetadata|entitlementprocesses|omnisupervisorconfigs)\//i.test(normalized)) {
+        return joinMetadataPath(normalized);
+    }
+
+    const canonicalType = normalizeMetadataTypeName(typeName);
+
+    if (canonicalType === 'Custom Field' && normalized.includes('/')) {
+        const parts = normalized.split('/').filter(Boolean);
+        if (parts.length >= 2) {
+            const objectName = parts[0];
+            const fieldName = appendMetadataSuffix(parts.slice(1).join('/'), '.field-meta.xml');
+            return joinMetadataPath(`objects/${objectName}/fields/${fieldName}`);
+        }
+    }
+
+    if (canonicalType === 'ValidationRule' && normalized.includes('/')) {
+        const parts = normalized.split('/').filter(Boolean);
+        if (parts.length >= 2) {
+            const objectName = parts[0];
+            const ruleName = appendMetadataSuffix(parts.slice(1).join('/'), '.validationRule-meta.xml');
+            return joinMetadataPath(`objects/${objectName}/validationRules/${ruleName}`);
+        }
+    }
+
+    if (canonicalType === 'Record Type') {
+        if (normalized.includes('/')) {
+            const parts = normalized.split('/').filter(Boolean);
+            if (parts.length >= 2) {
+                const objectName = parts[0];
+                const recordTypeName = appendMetadataSuffix(parts.slice(1).join('/'), '.recordType-meta.xml');
+                return joinMetadataPath(`objects/${objectName}/recordTypes/${recordTypeName}`);
+            }
+        }
+        return joinMetadataPath(`recordTypes/${appendMetadataSuffix(normalized, '.recordType-meta.xml')}`);
+    }
+
+    if (canonicalType === 'Quick Action') {
+        if (normalized.includes('/')) {
+            const parts = normalized.split('/').filter(Boolean);
+            if (parts.length >= 2) {
+                const objectName = parts[0];
+                const quickActionName = appendMetadataSuffix(parts.slice(1).join('/'), '.quickAction-meta.xml');
+                return joinMetadataPath(`objects/${objectName}/quickActions/${quickActionName}`);
+            }
+        }
+
+        const quickActionMatch = normalized.match(/^([^/.]+)\.(.+)$/);
+        if (quickActionMatch) {
+            const objectName = quickActionMatch[1];
+            const quickActionName = appendMetadataSuffix(quickActionMatch[2], '.quickAction-meta.xml');
+            return joinMetadataPath(`objects/${objectName}/quickActions/${quickActionName}`);
+        }
+
+        return joinMetadataPath(`quickActions/${appendMetadataSuffix(normalized, '.quickAction-meta.xml')}`);
+    }
+
+    if (canonicalType === 'Compact Layout') {
+        if (normalized.includes('/')) {
+            const parts = normalized.split('/').filter(Boolean);
+            if (parts.length >= 2) {
+                const objectName = parts[0];
+                const layoutName = appendMetadataSuffix(parts.slice(1).join('/'), '.compactLayout-meta.xml');
+                return joinMetadataPath(`objects/${objectName}/compactLayouts/${layoutName}`);
+            }
+        }
+
+        const compactLayoutMatch = normalized.match(/^([^/.]+)\.(.+)$/);
+        if (compactLayoutMatch) {
+            const objectName = compactLayoutMatch[1];
+            const layoutName = appendMetadataSuffix(compactLayoutMatch[2], '.compactLayout-meta.xml');
+            return joinMetadataPath(`objects/${objectName}/compactLayouts/${layoutName}`);
+        }
+    }
+
+    if (canonicalType === 'CustomObject') {
+        const fileName = appendMetadataSuffix(normalized, '.object-meta.xml');
+        const objectName = fileName.replace(/\.object-meta\.xml$/i, '');
+        return joinMetadataPath(`objects/${objectName}/${fileName}`);
+    }
+
+    if (canonicalType === 'Lightning Web Component') {
+        return joinMetadataPath(`lwc/${normalized}`);
+    }
+
+    if (canonicalType === 'Metadata' && lower.endsWith('.md-meta.xml')) {
+        return joinMetadataPath(`customMetadata/${normalized}`);
+    }
+
+    const folderByType = {
+        ApexClass: 'classes',
+        ApexTrigger: 'triggers',
+        Flow: 'flows',
+        'Permission Set Group': 'permissionsetgroups',
+        PermissionSet: 'permissionsets',
+        Profile: 'profiles',
+        Layout: 'layouts',
+        FlexiPage: 'flexipages',
+        Queue: 'queues',
+        'Path Assistant': 'pathAssistants',
+        'Milestone Type': 'milestoneTypes',
+        'Global Value Set': 'globalValueSets',
+        'Standard Value Set': 'standardValueSets',
+        Application: 'applications',
+        'Custom Metadata': 'customMetadata',
+        Settings: 'settings',
+        'Entitlement Process': 'entitlementProcesses',
+        Supervisor: 'omniSupervisorConfigs',
+        Skill: 'skills',
+        Group: 'groups',
+        'Queue Routing Config': 'queueRoutingConfigs'
+    };
+
+    const folder = folderByType[canonicalType];
+    if (folder) {
+        return joinMetadataPath(`${folder}/${normalized}`);
+    }
+
+    return normalized;
 }
 
 function parseOptionalBoolean(value) {
@@ -539,39 +783,20 @@ function extractMetadataType(filePath) {
 }
 
 function extractMetadataName(filePath) {
-    const cleanPath = String(filePath || '').replace(/\\/g, '/').trim();
+    const cleanPath = normalizeMetadataName(filePath);
     if (!cleanPath) return { name: '', type: 'Metadata' };
 
     const type = extractMetadataType(cleanPath);
 
-    const objectField = cleanPath.match(/\/objects\/([^/]+)\/fields\/([^/]+)$/i);
-    if (objectField) {
-        return {
-            name: stripKnownSuffixes(objectField[1]) + '/' + stripKnownSuffixes(objectField[2]),
-            type: 'Custom Field'
-        };
-    }
-
-    const objectValidationRule = cleanPath.match(/\/objects\/([^/]+)\/validationRules\/([^/]+)$/i);
-    if (objectValidationRule) {
-        return {
-            name: stripKnownSuffixes(objectValidationRule[1]) + '/' + stripKnownSuffixes(objectValidationRule[2]),
-            type: 'ValidationRule'
-        };
-    }
-
-    const lwcMatch = cleanPath.match(/\/lwc\/([^/]+)\//i);
-    if (lwcMatch) {
-        return { name: stripKnownSuffixes(lwcMatch[1]), type: 'Lightning Web Component' };
-    }
-
-    const parts = cleanPath.split('/');
-    const last = parts[parts.length - 1] || '';
     return {
-        name: last,
+        name: cleanPath,
         type: normalizeMetadataTypeName(type)
     };
 }
+
+migrateLegacyMetadataNames();
+consolidateDuplicateMetadatas();
+consolidateDuplicatePullRequests();
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -888,7 +1113,7 @@ app.get('/api/metadatas', (req, res) => {
     if (req.query.sprint_id)        { conditions.push('m.sprint_id = ?');        params.push(Number(req.query.sprint_id)); }
     if (req.query.metadata_type_id) { conditions.push('m.metadata_type_id = ?'); params.push(Number(req.query.metadata_type_id)); }
     if (req.query.q) {
-        conditions.push('(m.metadata_name LIKE ? OR m.ticket LIKE ? OR m.description LIKE ?)');
+        conditions.push('(m.metadata_name LIKE ? ESCAPE \'\\\' OR m.ticket LIKE ? ESCAPE \'\\\' OR m.description LIKE ? ESCAPE \'\\\')');
         const like = '%' + req.query.q.replace(/[%_\\]/g, c => '\\' + c) + '%';
         params.push(like, like, like);
     }
@@ -976,7 +1201,7 @@ app.get('/api/exports', (req, res) => {
         params.push(rawChangeType);
     }
     if (rawSearch) {
-        conditions.push('(m.metadata_name LIKE ? OR m.ticket LIKE ? OR m.description LIKE ?)');
+        conditions.push('(m.metadata_name LIKE ? ESCAPE \'\\\' OR m.ticket LIKE ? ESCAPE \'\\\' OR m.description LIKE ? ESCAPE \'\\\')');
         const like = '%' + rawSearch.replace(/[%_\\]/g, c => '\\' + c) + '%';
         params.push(like, like, like);
     }
@@ -1089,7 +1314,8 @@ app.post('/api/metadatas', (req, res) => {
     const frontId = parsePositiveInt(front_id);
     const sprintIdValue = sprint_id == null || sprint_id === '' ? null : parsePositiveInt(sprint_id);
     const metadataTypeId = parsePositiveInt(metadata_type_id);
-    const normalizedMetadataName = normalizeText(metadata_name);
+    const metadataType = metadataTypeId ? selectMetadataTypeRecordById.get(metadataTypeId) : null;
+    const normalizedMetadataName = normalizeMetadataNameByType(metadata_name, metadataType?.name);
     const normalizedDescription = normalizeText(description);
     const normalizedTicket = normalizeText(ticket) || null;
 
@@ -1111,7 +1337,7 @@ app.post('/api/metadatas', (req, res) => {
     if (!selectFrontById.get(frontId)) {
         return res.status(400).json({ error: 'front_id invalido' });
     }
-    if (!selectMetadataTypeById.get(metadataTypeId)) {
+    if (!metadataType) {
         return res.status(400).json({ error: 'metadata_type_id invalido' });
     }
     if (sprintIdValue && !selectSprintByIdAndFront.get(sprintIdValue, frontId)) {
@@ -1175,8 +1401,9 @@ app.post('/api/metadatas/bulk', (req, res) => {
     const uniqueMetadata = new Map();
     for (let index = 0; index < metadataItems.length; index += 1) {
         const row = metadataItems[index] || {};
-        const metadataName = normalizeText(row.metadata_name);
         const metadataTypeId = parsePositiveInt(row.metadata_type_id);
+        const metadataType = metadataTypeId ? selectMetadataTypeRecordById.get(metadataTypeId) : null;
+        const metadataName = normalizeMetadataNameByType(row.metadata_name, metadataType?.name);
         const changeType = normalizeText(row.change_type);
 
         if (!metadataName || !metadataTypeId || !changeType) {
@@ -1188,7 +1415,7 @@ app.post('/api/metadatas/bulk', (req, res) => {
         if (!VALID_CHANGE_TYPES.has(changeType)) {
             return res.status(400).json({ error: `metadata_items[${index}].change_type invalido` });
         }
-        if (!selectMetadataTypeById.get(metadataTypeId)) {
+        if (!metadataType) {
             return res.status(400).json({ error: `metadata_items[${index}].metadata_type_id invalido` });
         }
 
@@ -1558,6 +1785,203 @@ app.post('/api/scan-commits', async (req, res) => {
         }
         res.status(500).json({ error: error?.message || 'Erro ao ler commits' });
     }
+});
+
+// ── Varredura de PRs a partir de merge commits ────────────────────────────────
+app.post('/api/repos/:id/scan-prs', async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'id invalido' });
+
+        const repo = db.prepare('SELECT * FROM repos WHERE id = ?').get(id);
+        if (!repo) return res.status(404).json({ error: 'Repositorio nao encontrado' });
+
+        const repoPath = assertValidRepoPath(repo.repo_path);
+        const sinceDays = Math.min(Math.max(Number(req.body?.since_days) || 90, 1), 3650);
+        const branchFilter = String(req.body?.branch_filter || '').trim().toLowerCase();
+        const authorFilter = String(req.body?.author_filter || '').trim().toLowerCase();
+        const sinceStart = new Date();
+        sinceStart.setHours(0, 0, 0, 0);
+        sinceStart.setDate(sinceStart.getDate() - sinceDays);
+        const sinceIso = sinceStart.toISOString();
+
+        // Tentar obter URL base das PRs a partir do remote origin
+        let prBaseUrl = null;
+        try {
+            const { stdout: remoteOut } = await runGit(repoPath, ['remote', 'get-url', 'origin']);
+            const remote = String(remoteOut || '').trim();
+            const httpsMatch = remote.match(/https?:\/\/[^/]+\/([^/]+\/[^/]+?)(?:\.git)?$/);
+            const sshMatch   = remote.match(/git@[^:]+:([^/]+\/[^/]+?)(?:\.git)?$/);
+            const orgRepo = (httpsMatch && httpsMatch[1]) || (sshMatch && sshMatch[1]);
+            if (orgRepo) prBaseUrl = 'https://github.com/' + orgRepo + '/pull/';
+        } catch {
+            // remote nao configurado — continuar sem URL
+        }
+
+        // Listar merge commits no periodo
+        const { stdout: logOut } = await runGit(repoPath, [
+            'log', '--all', '--merges',
+            '--format=%H\t%s\t%an\t%ae',
+            '--since=' + sinceIso
+        ]);
+
+        const PR_REGEX = /Merge pull request #(\d+) from [^/]+\/(.+)/;
+        const mergeLines = String(logOut || '').split('\n').map(l => l.trim()).filter(Boolean);
+
+        const prs = [];
+        for (const line of mergeLines) {
+            const parts = line.split('\t');
+            if (parts.length < 2) continue;
+            const sha = String(parts[0] || '').trim();
+            const subject = String(parts[1] || '').trim();
+            const authorName = String(parts[2] || '').trim();
+            const authorEmail = String(parts[3] || '').trim();
+            const match   = subject.match(PR_REGEX);
+            if (!match) continue;
+
+            const sourceBranch = String(match[2] || '').trim();
+            if (branchFilter && !sourceBranch.toLowerCase().includes(branchFilter)) {
+                continue;
+            }
+            if (authorFilter) {
+                const authorText = (authorName + ' ' + authorEmail).toLowerCase();
+                if (!authorText.includes(authorFilter)) {
+                    continue;
+                }
+            }
+
+            prs.push({
+                sha,
+                prNumber: match[1],
+                sourceBranch,
+                authorName,
+                authorEmail
+            });
+        }
+
+        if (prs.length === 0) {
+            return res.json({ total_prs: 0, total_matches: 0, matches: [], pr_base_url: prBaseUrl });
+        }
+
+        // Para cada PR, obter arquivos alterados e cruzar com metadados cadastrados
+        const allMatches = [];
+        const metadataCache = new Map();
+
+        for (const pr of prs) {
+            let files;
+            try {
+                const { stdout: diffOut } = await runGit(repoPath, [
+                    'diff-tree', '--no-commit-id', '--name-only', '-r', '-m', pr.sha
+                ]);
+                files = Array.from(new Set(
+                    String(diffOut || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+                ));
+            } catch {
+                continue;
+            }
+
+            for (const file of files) {
+                const normalized = normalizeMetadataName(file);
+                if (!normalized) continue;
+
+                let metadataRow;
+                if (metadataCache.has(normalized)) {
+                    metadataRow = metadataCache.get(normalized);
+                } else {
+                    metadataRow = db.prepare(
+                        'SELECT id, metadata_name FROM metadatas WHERE metadata_name = ? COLLATE NOCASE'
+                    ).get(normalized) || null;
+                    metadataCache.set(normalized, metadataRow);
+                }
+
+                if (!metadataRow) continue;
+
+                // Evitar duplicatas para mesmo pr_number + metadata_id
+                const dedupKey = pr.prNumber + '::' + metadataRow.id;
+                if (allMatches.some(m => m._dedupKey === dedupKey)) continue;
+
+                allMatches.push({
+                    _dedupKey: dedupKey,
+                    pr_number: pr.prNumber,
+                    source_branch: pr.sourceBranch,
+                    pr_author_name: pr.authorName,
+                    pr_author_email: pr.authorEmail,
+                    commit_sha: pr.sha,
+                    metadata_id: metadataRow.id,
+                    metadata_name: metadataRow.metadata_name,
+                    pr_url: prBaseUrl ? prBaseUrl + pr.prNumber : null
+                });
+            }
+        }
+
+        // Remover campo interno antes de retornar
+        const matches = allMatches.map(({ _dedupKey, ...m }) => m);
+
+        res.json({
+            total_prs: prs.length,
+            total_matches: matches.length,
+            matches,
+            pr_base_url: prBaseUrl,
+            since_utc: sinceIso,
+            filters: {
+                branch_filter: branchFilter,
+                author_filter: authorFilter
+            }
+        });
+    } catch (error) {
+        if (error && Number.isInteger(error.status)) {
+            return res.status(error.status).json({ error: error.message });
+        }
+        if (error && error.code === 'ENOENT') {
+            return res.status(500).json({ error: 'git nao encontrado no sistema' });
+        }
+        const stderr = String(error?.stderr || '').trim();
+        if (stderr) return res.status(500).json({ error: stderr });
+        res.status(500).json({ error: error?.message || 'Erro ao varrer PRs' });
+    }
+});
+
+app.post('/api/repos/:id/save-scanned-prs', (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'id invalido' });
+
+    const repo = db.prepare('SELECT id FROM repos WHERE id = ?').get(id);
+    if (!repo) return res.status(404).json({ error: 'Repositorio nao encontrado' });
+
+    const matches = Array.isArray(req.body?.matches) ? req.body.matches : [];
+    if (matches.length === 0) return res.status(400).json({ error: 'Nenhum match informado' });
+
+    const now = new Date().toISOString();
+    let saved = 0;
+    let skipped = 0;
+
+    const saveMany = db.transaction(() => {
+        for (const m of matches) {
+            const prNumber   = String(m.pr_number   || '').trim();
+            const metadataId = Number(m.metadata_id);
+            const rawUrl     = String(m.pr_url      || '').trim();
+
+            if (!prNumber || !metadataId || !rawUrl) { skipped++; continue; }
+
+            let parsedUrl;
+            try {
+                parsedUrl = new URL(rawUrl);
+                if (!['http:', 'https:'].includes(parsedUrl.protocol)) { skipped++; continue; }
+            } catch { skipped++; continue; }
+
+            const meta = db.prepare('SELECT id FROM metadatas WHERE id = ?').get(metadataId);
+            if (!meta) { skipped++; continue; }
+
+            const existing = selectPullRequestByMetadataAndUrl.get(metadataId, parsedUrl.toString());
+            if (existing) { skipped++; continue; }
+
+            insertPullRequest.run(metadataId, 'PR #' + prNumber, parsedUrl.toString(), now);
+            saved++;
+        }
+    });
+
+    saveMany();
+    res.json({ saved, skipped });
 });
 
 app.listen(PORT, '127.0.0.1', () => {
