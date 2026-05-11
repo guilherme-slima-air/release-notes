@@ -1,7 +1,7 @@
-(function releaseNotesApp() {
+﻿(function releaseNotesApp() {
     'use strict';
 
-    // ── API helpers ──────────────────────────────────────────────────────────
+    // ÔöÇÔöÇ API helpers ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     async function parseApiResponse(res) {
         if (res.ok) {
             if (res.status === 204) {
@@ -71,7 +71,7 @@
         }
     };
 
-    // ── State ────────────────────────────────────────────────────────────────
+    // ÔöÇÔöÇ State ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     const state = {
         items: [],
         metadataTypes: [],
@@ -85,16 +85,18 @@
         highlightedMetadataId: '',
         activeTab: 'metadata',
         scanResults: [],
+        scanSelectedCommits: [],
         lastScanRepoPath: '',
         authorScanResults: [],
         lastAuthorScanRepoPath: '',
         prBranchSelectedMetadata: null,
         prBranchSelectedBranches: [''],
         scanPrResults: [],
+        scanPrSummary: null,
         scanPrRepoId: null
     };
 
-    // ── DOM refs ─────────────────────────────────────────────────────────────
+    // ÔöÇÔöÇ DOM refs ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     const el = {
         btnThemeToggle: document.getElementById('btn-theme-toggle'),
         tabBtnMetadata: document.getElementById('tab-btn-metadata'),
@@ -112,9 +114,11 @@
         // Scan PRs
         scanPrsForm: document.getElementById('scan-prs-form'),
         scanPrsRepoSelect: document.getElementById('scan-prs-repo-select'),
-        scanPrsSinceDays: document.getElementById('scan-prs-since-days'),
-        scanPrsBranchFilter: document.getElementById('scan-prs-branch-filter'),
-        scanPrsAuthorFilter: document.getElementById('scan-prs-author-filter'),
+        scanPrsFrontSelect: document.getElementById('scan-prs-front-select'),
+        scanPrsTargetBranches: document.getElementById('scan-prs-target-branches'),
+        scanPrsSinceDate: document.getElementById('scan-prs-since-date'),
+        scanPrsUntilDate: document.getElementById('scan-prs-until-date'),
+        scanPrsIncludeLinked: document.getElementById('scan-prs-include-linked'),
         scanPrsError: document.getElementById('scan-prs-error'),
         scanPrsInfo: document.getElementById('scan-prs-info'),
         btnScanPrs: document.getElementById('btn-scan-prs'),
@@ -158,6 +162,10 @@
         scanResultsSection: document.getElementById('scan-results-section'),
         scanCountLabel: document.getElementById('scan-count-label'),
         scanResultsBody: document.getElementById('scan-results-body'),
+        btnScanSelectAll: document.getElementById('btn-scan-select-all'),
+        btnScanClearSelection: document.getElementById('btn-scan-clear-selection'),
+        btnUseAllCommits: document.getElementById('btn-use-all-commits'),
+        btnUseSelectedCommits: document.getElementById('btn-use-selected-commits'),
         // Author scan form
         authorScanForm: document.getElementById('author-scan-form'),
         authorScanRepoPath: document.getElementById('author-scan-repo-path'),
@@ -188,21 +196,21 @@
         prBranchResultsContainer: document.getElementById('pr-branch-results-container'),
         form: document.getElementById('metadata-form'),
         formError: document.getElementById('form-error'),
-        // Form lookups — frente
+        // Form lookups ÔÇö frente
         frontSelect:    document.getElementById('f-front-select'),
         addFrontRow:    document.getElementById('add-front-row'),
         btnAddFront:    document.getElementById('btn-add-front'),
         fFrontNew:      document.getElementById('f-front-new'),
         btnSaveFront:   document.getElementById('btn-save-front'),
         btnCancelFront: document.getElementById('btn-cancel-front'),
-        // Form lookups — sprint
+        // Form lookups ÔÇö sprint
         sprintSelect:    document.getElementById('f-sprint-select'),
         addSprintRow:    document.getElementById('add-sprint-row'),
         btnAddSprint:    document.getElementById('btn-add-sprint'),
         fSprintNew:      document.getElementById('f-sprint-new'),
         btnSaveSprint:   document.getElementById('btn-save-sprint'),
         btnCancelSprint: document.getElementById('btn-cancel-sprint'),
-        // Form lookups — tipo
+        // Form lookups ÔÇö tipo
         typeSelect:    document.getElementById('f-type-select'),
         addTypeRow:    document.getElementById('add-type-row'),
         btnAddType:    document.getElementById('btn-add-type'),
@@ -234,7 +242,7 @@
         metadataFilterType:     document.getElementById('metadata-filter-type'),
         metadataFilterSearch:   document.getElementById('metadata-filter-search'),
         btnResetMetadataFilters: document.getElementById('btn-reset-metadata-filters'),
-        // Modal de edição
+        // Modal de edi├º├úo
         editModal:       document.getElementById('edit-modal'),
         editForm:        document.getElementById('edit-form'),
         editMetadataName: document.getElementById('edit-metadata-name'),
@@ -257,7 +265,7 @@
         itemsList:      document.getElementById('items-list')
     };
 
-    // ── State (extended) ──────────────────────────────────────────────────────
+    // ÔöÇÔöÇ State (extended) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     const metadataFilterState = {
         frontId: '',
         sprintId: '',
@@ -267,7 +275,7 @@
 
     let editingMetadataId = null;
 
-    // ── Utilitarios ──────────────────────────────────────────────────────────
+    // ÔöÇÔöÇ Utilitarios ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     function escapeHtml(value) {
         return String(value)
             .replace(/&/g, '&amp;')
@@ -308,7 +316,7 @@
         localStorage.setItem('release_notes_theme', safeTheme);
 
         if (el.btnThemeToggle) {
-            el.btnThemeToggle.textContent = safeTheme === 'dark' ? '🔦 Tema claro' : '🔦 Tema escuro';
+            el.btnThemeToggle.textContent = safeTheme === 'dark' ? '­ƒöª Tema claro' : '­ƒöª Tema escuro';
             el.btnThemeToggle.setAttribute('aria-label', safeTheme === 'dark' ? 'Alternar para tema claro' : 'Alternar para tema escuro');
             el.btnThemeToggle.setAttribute('title', safeTheme === 'dark' ? 'Alternar para tema claro' : 'Alternar para tema escuro');
         }
@@ -504,7 +512,7 @@
         });
     }
 
-    // ── Lookup helpers ───────────────────────────────────────────────────────
+    // ÔöÇÔöÇ Lookup helpers ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     function fillSelect(selectEl, items, emptyLabel, keepValueId) {
         const prev = keepValueId !== undefined ? String(keepValueId) : selectEl.value;
         selectEl.innerHTML = '';
@@ -542,7 +550,7 @@
         });
     }
 
-    // ── Carregamento de dados ─────────────────────────────────────────────────
+    // ÔöÇÔöÇ Carregamento de dados ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     async function loadRepos() {
         try {
             state.repos = await api.get('/api/repos');
@@ -713,9 +721,9 @@
         if (el.scanRepoSelect) el.scanRepoSelect.innerHTML = html;
         if (el.authorScanRepoSelect) el.authorScanRepoSelect.innerHTML = html;
 
-        // Scan PRs usa id do repo (não o path)
+        // Scan PRs usa id do repo (n├úo o path)
         if (el.scanPrsRepoSelect) {
-            const prOpts = ['<option value="">Selecione um repositório</option>'];
+            const prOpts = ['<option value="">Selecione um reposit├│rio</option>'];
             state.repos.forEach(function(repo) {
                 prOpts.push('<option value="' + escapeHtml(String(repo.id)) + '">' + escapeHtml(repo.name) + '</option>');
             });
@@ -849,6 +857,9 @@
         const fronts = await api.get('/api/fronts');
         fillSelect(el.frontSelect, fronts, 'Selecione uma frente');
         fillSelect(el.filterFront, fronts, 'Todas as frentes', state.filterFrontId);
+        if (el.scanPrsFrontSelect) {
+            fillSelect(el.scanPrsFrontSelect, fronts, 'Selecione uma frente');
+        }
     }
 
     async function loadFormSprints(frontId) {
@@ -889,7 +900,7 @@
         generateRelease();
     }
 
-    // ── Renderizacao ─────────────────────────────────────────────────────────
+    // ÔöÇÔöÇ Renderizacao ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     function renderPrList(prs) {
         if (!prs || prs.length === 0) return '';
         return prs.map(function(pr) {
@@ -910,7 +921,7 @@
     function buildReleaseNote(items, scopeText) {
         if (items.length === 0) return 'Sem itens para o filtro selecionado.';
 
-        // Organizar: Frente → Sprint → Tipo de Metadata → Items
+        // Organizar: Frente ÔåÆ Sprint ÔåÆ Tipo de Metadata ÔåÆ Items
         const byFront = new Map();
         items.forEach(function(item) {
             if (!byFront.has(item.front)) byFront.set(item.front, new Map());
@@ -927,7 +938,7 @@
         }
         lines.push('');
 
-        // Iterar por Frente → Sprint → Tipo
+        // Iterar por Frente ÔåÆ Sprint ÔåÆ Tipo
         Array.from(byFront.keys()).sort(function(a, b) { return a.localeCompare(b, 'pt-BR'); })
         .forEach(function(front) {
             lines.push('## Frente: ' + front, '');
@@ -942,7 +953,7 @@
                 .forEach(function(metadataType) {
                     lines.push('#### ' + metadataType);
                     lines.push('');
-                    lines.push('| Metadata | Ticket | Descrição | Tipo de Mudança | PRs |');
+                    lines.push('| Metadata | Ticket | Descri├º├úo | Tipo de Mudan├ºa | PRs |');
                     lines.push('|----------|--------|-----------|-----------------|-----|');
 
                     const itemsOfType = byType.get(metadataType)
@@ -986,7 +997,7 @@
         } else {
             const fronts  = new Set(state.items.map(function(i) { return i.front;  })).size;
             const sprints = new Set(state.items.map(function(i) { return i.sprint; })).size;
-            el.releaseMeta.textContent = 'Escopo atual: ' + scopeText + ' • ' + state.items.length + ' itens em ' + fronts + ' frente(s) e ' + sprints + ' sprint(s).';
+            el.releaseMeta.textContent = 'Escopo atual: ' + scopeText + ' ÔÇó ' + state.items.length + ' itens em ' + fronts + ' frente(s) e ' + sprints + ' sprint(s).';
         }
     }
 
@@ -1154,14 +1165,17 @@
     async function loadMetadataFromCommit() {
         hideCommitInfo();
         const repoPath = el.fRepoPath.value.trim();
-        const commitHash = el.fCommitHash.value.trim();
+        const commitHashes = String(el.fCommitHash.value || '')
+            .split(/[\s,;\n\r]+/)
+            .map(function(hash) { return hash.trim(); })
+            .filter(Boolean);
 
         if (!repoPath) {
             showCommitInfo('Informe o caminho local do repositorio.', true);
             el.fRepoPath.focus();
             return;
         }
-        if (!commitHash) {
+        if (commitHashes.length === 0) {
             showCommitInfo('Informe o hash do commit.', true);
             el.fCommitHash.focus();
             return;
@@ -1172,10 +1186,18 @@
         el.btnLoadCommit.textContent = 'Buscando...';
 
         try {
-            const payload = await api.post('/api/metadata-from-commit', {
-                repo_path: repoPath,
-                commit_hash: commitHash
-            });
+            let payload;
+            if (commitHashes.length === 1) {
+                payload = await api.post('/api/metadata-from-commit', {
+                    repo_path: repoPath,
+                    commit_hash: commitHashes[0]
+                });
+            } else {
+                payload = await api.post('/api/metadata-from-commits', {
+                    repo_path: repoPath,
+                    commit_hashes: commitHashes
+                });
+            }
 
             const metadataItems = Array.isArray(payload.metadata_items) ? payload.metadata_items : [];
             if (metadataItems.length === 0) {
@@ -1206,7 +1228,7 @@
 
             localStorage.setItem('release_notes_repo_path', repoPath);
             showCommitInfo(
-                'Commit lido com sucesso: ' + payload.commit_hash + '. ' +
+                'Commit(s) lido(s) com sucesso: ' + (payload.commit_hash || commitHashes.join(', ')) + '. ' +
                 String(payload.total_files || 0) + ' arquivo(s), ' + String(addedRows) + ' metadata(s) adicionado(s).',
                 false
             );
@@ -1267,22 +1289,42 @@
         await loadItems();
     }
 
-    // ── Scan commits ──────────────────────────────────────────────────────────
+    // ÔöÇÔöÇ Scan commits ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    function parseAuthorEmails(value) {
+        return String(value || '')
+            .split(/[\s,;\n\r]+/)
+            .map(function(email) { return email.trim().toLowerCase(); })
+            .filter(Boolean);
+    }
+
+    function getSelectedAuthorEmails() {
+        const selectedPeople = Array.from(el.scanPersonSelect ? el.scanPersonSelect.selectedOptions : []).map(function(option) {
+            const personId = Number(option.value || 0);
+            const person = state.people.find(function(item) {
+                return Number(item.id) === personId;
+            });
+            return String(person && person.email || '').trim().toLowerCase();
+        }).filter(Boolean);
+
+        const manualEmails = parseAuthorEmails(el.scanEmail && el.scanEmail.value);
+        return Array.from(new Set(selectedPeople.concat(manualEmails)));
+    }
+
     async function scanCommits() {
         el.scanError.hidden = true;
         el.scanError.textContent = '';
         el.scanInfo.hidden = true;
         el.scanInfo.textContent = '';
 
-        const email = el.scanEmail.value.trim();
+        const authorEmails = getSelectedAuthorEmails();
         const repoPath = el.scanRepoPath.value.trim();
         const since = el.scanSince.value ? el.scanSince.value + 'T00:00:00' : '';
         const until = el.scanUntil.value ? el.scanUntil.value + 'T23:59:59' : '';
         const branch = el.scanBranch.value.trim();
 
-        if (!email) {
+        if (authorEmails.length === 0) {
             el.scanError.hidden = false;
-            el.scanError.textContent = 'Informe o email do autor.';
+            el.scanError.textContent = 'Informe ao menos um email de autor.';
             el.scanEmail.focus();
             return;
         }
@@ -1301,7 +1343,7 @@
 
         try {
             const payload = await api.post('/api/scan-commits', {
-                email,
+                author_emails: authorEmails,
                 repo_path: repoPath,
                 since: since || undefined,
                 until: until || undefined,
@@ -1310,10 +1352,11 @@
 
             state.scanResults = payload.commits || [];
             state.lastScanRepoPath = repoPath;
+            state.scanSelectedCommits = [];
             localStorage.setItem('release_notes_scan_repo_path', repoPath);
 
             if (state.scanResults.length === 0) {
-                el.scanInfo.textContent = 'Nenhum commit com metadados identificaveis encontrado para este email.';
+                el.scanInfo.textContent = 'Nenhum commit com metadados identificaveis encontrado para os autores informados.';
             } else {
                 el.scanInfo.textContent = state.scanResults.length + ' commit(s) encontrado(s) com metadados Salesforce.';
             }
@@ -1348,6 +1391,7 @@
 
             return [
                 '<tr>',
+                '  <td><input type="checkbox" class="scan-commit-checkbox" data-scan-hash="' + escapeHtml(commit.hash) + '"' + (state.scanSelectedCommits.includes(commit.hash) ? ' checked' : '') + '></td>',
                 '  <td><code class="scan-hash" title="' + escapeHtml(commit.hash) + '">' + escapeHtml(commit.hash.slice(0, 12)) + '</code></td>',
                 '  <td class="scan-date">' + escapeHtml(formatDateTime(commit.authored_at)) + '</td>',
                 '  <td>' + escapeHtml(commit.author_name) + '<br><small class="scan-email-cell">' + escapeHtml(commit.author_email) + '</small></td>',
@@ -1362,19 +1406,72 @@
                 useCommit(state.scanResults[Number(btn.dataset.useCommit)]);
             });
         });
+
+        el.scanResultsBody.querySelectorAll('.scan-commit-checkbox').forEach(function(input) {
+            input.addEventListener('change', function() {
+                const selected = el.scanResultsBody.querySelectorAll('.scan-commit-checkbox:checked');
+                state.scanSelectedCommits = Array.from(selected).map(function(item) {
+                    return String(item.dataset.scanHash || '');
+                }).filter(Boolean);
+            });
+        });
     }
 
-    function useCommit(commit) {
+    function selectAllScannedCommits() {
+        state.scanSelectedCommits = state.scanResults.map(function(commit) {
+            return commit.hash;
+        });
+        renderScanResults();
+    }
+
+    function clearScannedCommitSelection() {
+        state.scanSelectedCommits = [];
+        renderScanResults();
+    }
+
+    async function importMetadataFromScanCommits(commits) {
+        const selectedHashes = (Array.isArray(commits) ? commits : []).map(function(commit) {
+            return String(commit && commit.hash || '').trim();
+        }).filter(Boolean);
+
+        if (selectedHashes.length === 0) {
+            el.scanError.hidden = false;
+            el.scanError.textContent = 'Selecione ao menos um commit para importar.';
+            return;
+        }
+
         el.fRepoPath.value = state.lastScanRepoPath;
-        el.fCommitHash.value = commit.hash;
+        el.fCommitHash.value = selectedHashes.join(', ');
         if (state.lastScanRepoPath) {
             localStorage.setItem('release_notes_repo_path', state.lastScanRepoPath);
         }
         setActiveTab('metadata');
-        loadMetadataFromCommit();
+        await loadMetadataFromCommit();
     }
 
-    // ── Acoes ─────────────────────────────────────────────────────────────────
+    async function useAllCommits() {
+        await importMetadataFromScanCommits(state.scanResults);
+    }
+
+    async function useSelectedCommits() {
+        const selected = state.scanResults.filter(function(commit) {
+            return state.scanSelectedCommits.includes(commit.hash);
+        });
+
+        if (selected.length === 0) {
+            el.scanError.hidden = false;
+            el.scanError.textContent = 'Selecione ao menos um commit para importar.';
+            return;
+        }
+
+        await importMetadataFromScanCommits(selected);
+    }
+
+    function useCommit(commit) {
+        importMetadataFromScanCommits([commit]);
+    }
+
+    // ÔöÇÔöÇ Acoes ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     async function deleteItem(id) {
         await api.del('/api/metadatas/' + id);
         await loadItems();
@@ -1408,14 +1505,14 @@
 
         if (!changeType) {
             el.editFormError.hidden = false;
-            el.editFormError.textContent = 'Selecione o tipo de mudança.';
+            el.editFormError.textContent = 'Selecione o tipo de mudan├ºa.';
             el.editChangeType.focus();
             return;
         }
 
         if (!description) {
             el.editFormError.hidden = false;
-            el.editFormError.textContent = 'Descreva a alteração.';
+            el.editFormError.textContent = 'Descreva a altera├º├úo.';
             el.editDescription.focus();
             return;
         }
@@ -1471,7 +1568,7 @@
         }
     }
 
-    // ── Eventos ───────────────────────────────────────────────────────────────
+    // ÔöÇÔöÇ Eventos ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     function bindEvents() {
         el.tabBtnMetadata.addEventListener('click', function() { setActiveTab('metadata'); });
         el.tabBtnRelease.addEventListener('click', function() { setActiveTab('release'); });
@@ -1482,6 +1579,27 @@
             e.preventDefault();
             scanCommits();
         });
+
+        if (el.btnScanSelectAll) {
+            el.btnScanSelectAll.addEventListener('click', function() {
+                selectAllScannedCommits();
+            });
+        }
+        if (el.btnScanClearSelection) {
+            el.btnScanClearSelection.addEventListener('click', function() {
+                clearScannedCommitSelection();
+            });
+        }
+        if (el.btnUseAllCommits) {
+            el.btnUseAllCommits.addEventListener('click', function() {
+                useAllCommits();
+            });
+        }
+        if (el.btnUseSelectedCommits) {
+            el.btnUseSelectedCommits.addEventListener('click', function() {
+                useSelectedCommits();
+            });
+        }
 
         // Repo form
         el.repoForm.addEventListener('submit', async function(e) {
@@ -1653,7 +1771,7 @@
             hideInfo();
         });
 
-        // Lookup — frente
+        // Lookup ÔÇö frente
         el.frontSelect.addEventListener('change', async function() {
             await loadFormSprints(el.frontSelect.value);
         });
@@ -1671,7 +1789,7 @@
             }
         );
 
-        // Lookup — sprint
+        // Lookup ÔÇö sprint
         bindLookup(el.btnAddSprint, el.addSprintRow, el.btnSaveSprint, el.btnCancelSprint, el.fSprintNew,
             async function(name) {
                 if (!name) return;
@@ -1686,7 +1804,7 @@
             }
         );
 
-        // Lookup — tipo de metadata
+        // Lookup ÔÇö tipo de metadata
         bindLookup(el.btnAddType, el.addTypeRow, el.btnSaveType, el.btnCancelType, el.fTypeNew,
             async function(name) {
                 if (!name) return;
@@ -1760,7 +1878,7 @@
             applyMetadataFilters();
         });
 
-        // Modal de edição
+        // Modal de edi├º├úo
         el.btnCloseEditModal.addEventListener('click', closeEditModal);
         el.btnCancelEdit.addEventListener('click', closeEditModal);
         el.editForm.addEventListener('submit', function(e) {
@@ -1821,7 +1939,7 @@
                 '<div class="item-top">',
                 '  <div>',
                 '    <h3 class="item-title">' + escapeHtml(item.metadata_name) + '</h3>',
-                '    <div class="item-meta"><span>' + escapeHtml(item.front) + '</span><span>•</span><span>' + escapeHtml(item.sprint) + '</span></div>',
+                '    <div class="item-meta"><span>' + escapeHtml(item.front) + '</span><span>ÔÇó</span><span>' + escapeHtml(item.sprint) + '</span></div>',
                 '  </div>',
                 '  <div class="badges">',
                 '    <span class="badge">' + escapeHtml(item.metadata_type) + '</span>',
@@ -1830,7 +1948,7 @@
                 '</div>',
                 '<p class="item-description">' + escapeHtml(item.description) + '</p>',
                 '<div class="item-meta">',
-                '  <span>Ticket: ' + escapeHtml(item.ticket || '-') + '</span><span>•</span>',
+                '  <span>Ticket: ' + escapeHtml(item.ticket || '-') + '</span><span>ÔÇó</span>',
                 '  <span>' + escapeHtml(formatDateTime(item.created_at)) + '</span>',
                 '</div>',
                 // PRs
@@ -1901,7 +2019,7 @@
         });
     }
 
-    // ── PR Branch Search ──────────────────────────────────────────────────────
+    // ÔöÇÔöÇ PR Branch Search ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     function extractBranchFromUrl(url) {
         try {
             const urlObj = new URL(url);
@@ -2095,86 +2213,139 @@
 
     async function runScanPrs() {
         const repoId = Number(el.scanPrsRepoSelect.value);
+        const frontId = Number(el.scanPrsFrontSelect && el.scanPrsFrontSelect.value);
+        const targetBranches = String(el.scanPrsTargetBranches && el.scanPrsTargetBranches.value || '')
+            .split(/[\s,;]+/)
+            .map(function(part) { return part.trim(); })
+            .filter(Boolean);
+
         if (!repoId) {
             el.scanPrsError.hidden = false;
-            el.scanPrsError.textContent = 'Selecione um repositório';
+            el.scanPrsError.textContent = 'Selecione um reposit├│rio';
             return;
         }
+        if (!frontId) {
+            el.scanPrsError.hidden = false;
+            el.scanPrsError.textContent = 'Selecione uma frente';
+            return;
+        }
+        if (targetBranches.length === 0) {
+            el.scanPrsError.hidden = false;
+            el.scanPrsError.textContent = 'Informe ao menos uma branch alvo';
+            return;
+        }
+
         el.scanPrsError.hidden = true;
         el.scanPrsInfo.hidden = false;
-        el.scanPrsInfo.textContent = 'Varrendo merge commits...';
+        el.scanPrsInfo.textContent = 'Descobrindo PRs por metadata...';
         el.btnScanPrs.disabled = true;
         el.scanPrsResultsSection.hidden = true;
         el.scanPrsSaveInfo.hidden = true;
         try {
-            const sinceDays = Math.max(1, Number(el.scanPrsSinceDays.value) || 90);
-            const branchFilter = String(el.scanPrsBranchFilter?.value || '').trim();
-            const authorFilter = String(el.scanPrsAuthorFilter?.value || '').trim();
-            const result = await api.post('/api/repos/' + repoId + '/scan-prs', {
-                since_days: sinceDays,
-                branch_filter: branchFilter,
-                author_filter: authorFilter
-            });
-            state.scanPrResults = result.matches || [];
+            const since = String(el.scanPrsSinceDate && el.scanPrsSinceDate.value || '').trim();
+            const until = String(el.scanPrsUntilDate && el.scanPrsUntilDate.value || '').trim();
+            const includeAlreadyLinked = Boolean(el.scanPrsIncludeLinked && el.scanPrsIncludeLinked.checked);
+
+            const payload = {
+                front_id: frontId,
+                target_branches: targetBranches,
+                include_already_linked: includeAlreadyLinked
+            };
+            if (since) payload.since = since;
+            if (until) payload.until = until;
+
+            const result = await api.post('/api/repos/' + repoId + '/discover-pr-links', payload);
+            state.scanPrResults = Array.isArray(result.results) ? result.results : [];
+            state.scanPrSummary = result.summary || null;
             state.scanPrRepoId = repoId;
             el.scanPrsInfo.hidden = true;
             if (state.scanPrResults.length === 0) {
                 el.scanPrsError.hidden = false;
-                el.scanPrsError.textContent = 'Nenhum match encontrado. ' + (result.total_prs || 0) + ' merge commit(s) analisado(s) no período.';
+                el.scanPrsError.textContent = 'Nenhum metadata elegivel encontrado para os filtros informados.';
                 return;
             }
-            el.scanPrsCountLabel.textContent = result.total_prs + ' PR(s) analisada(s) · ' + result.total_matches + ' match(es)';
+
+            const summary = state.scanPrSummary || {};
+            el.scanPrsCountLabel.textContent = [
+                String(summary.total_candidates || 0) + ' metadata(s)',
+                String(summary.total_matched || 0) + ' match(es)',
+                String(summary.total_conflict || 0) + ' conflito(s)',
+                String(summary.total_no_match || 0) + ' sem match'
+            ].join(' ┬À ');
+
             renderScanPrsResults(state.scanPrResults);
             el.scanPrsResultsSection.hidden = false;
         } catch (err) {
             el.scanPrsInfo.hidden = true;
             el.scanPrsError.hidden = false;
-            el.scanPrsError.textContent = err.message || 'Erro ao varrer PRs';
+            el.scanPrsError.textContent = err.message || 'Erro ao descobrir PRs';
         } finally {
             el.btnScanPrs.disabled = false;
         }
     }
 
+    function renderScanPrStatus(status) {
+        const map = {
+            matched: { label: 'Matched', color: '#0f7a31', background: '#e8f6eb' },
+            no_match: { label: 'Sem match', color: '#6b7280', background: '#f3f4f6' },
+            conflict: { label: 'Conflito', color: '#8a3b12', background: '#fff2e8' },
+            error: { label: 'Erro', color: '#991b1b', background: '#fee2e2' }
+        };
+        const def = map[status] || map.error;
+        return '<span style="font-size:0.75rem;padding:2px 8px;border-radius:999px;background:' + def.background + ';color:' + def.color + ';">' + def.label + '</span>';
+    }
+
     function renderScanPrsResults(matches) {
         if (!matches.length) {
-            el.scanPrsResultsContainer.innerHTML = '<p style="color:var(--muted)">Nenhum match encontrado.</p>';
+            el.scanPrsResultsContainer.innerHTML = '<p style="color:var(--muted)">Nenhum resultado para exibir.</p>';
             return;
         }
-        // Agrupar por PR
-        const byPr = new Map();
-        for (const m of matches) {
-            if (!byPr.has(m.pr_number)) byPr.set(m.pr_number, []);
-            byPr.get(m.pr_number).push(m);
-        }
+
         let html = '';
-        let idx = 0;
-        for (const [prNumber, items] of byPr) {
-            const prUrl = items[0].pr_url || '';
-            const branch = items[0].source_branch || '';
-            const authorName = items[0].pr_author_name || '';
-            const authorEmail = items[0].pr_author_email || '';
-            const authorLabel = authorName || authorEmail;
+        matches.forEach(function(item, idx) {
+            const status = String(item.status || 'error');
+            const matchedPr = item.matched_pr || null;
+            const prNumber = matchedPr && matchedPr.pr_number ? String(matchedPr.pr_number) : '';
+            const prUrl = matchedPr && matchedPr.pr_url ? String(matchedPr.pr_url) : '';
+            const sourceBranch = matchedPr && matchedPr.source_branch ? String(matchedPr.source_branch) : '';
+            const heuristic = item.heuristic_used ? String(item.heuristic_used) : '-';
+            const canSelect = status === 'matched' && prNumber;
+
             html += '<div style="border:1px solid var(--line);border-radius:6px;margin-bottom:12px;overflow:hidden;">';
-            html += '<div style="padding:10px 14px;background:var(--bg-alt);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">';
-            html += '<strong>PR #' + escapeHtml(prNumber) + '</strong>';
-            if (prUrl) html += ' <a href="' + escapeHtml(prUrl) + '" target="_blank" rel="noopener" style="font-size:0.8rem;color:var(--primary);">Abrir</a>';
-            html += ' <span style="font-size:0.8rem;color:var(--muted);">branch: ' + escapeHtml(branch) + '</span>';
-            if (authorLabel) {
-                html += ' <span style="font-size:0.8rem;color:var(--muted);">autor: ' + escapeHtml(authorLabel) + '</span>';
-            }
+            html += '<div style="padding:10px 14px;background:var(--bg-alt);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:8px;">';
+            html += '<strong style="font-size:0.9rem;">' + escapeHtml(item.metadata_name || '-') + '</strong>';
+            html += renderScanPrStatus(status);
             html += '</div>';
-            for (const m of items) {
-                html += '<label style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--line);cursor:pointer;">';
-                html += '<input type="checkbox" class="scan-pr-checkbox" data-idx="' + idx + '" checked>';
-                html += '<span style="flex:1;font-size:0.875rem;">' + escapeHtml(m.metadata_name) + '</span>';
-                if (!prUrl) {
-                    html += '<input type="text" data-idx="' + idx + '" class="scan-pr-url-input" placeholder="URL da PR (obrigatório)" style="flex:1;min-width:180px;font-size:0.8rem;padding:3px 6px;">';
+            html += '<div style="padding:10px 14px;display:grid;gap:6px;">';
+            html += '<div style="font-size:0.8rem;color:var(--muted);">heuristica: ' + escapeHtml(heuristic) + '</div>';
+
+            if (status === 'matched') {
+                html += '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;">';
+                html += '<input type="checkbox" class="scan-pr-checkbox" data-idx="' + idx + '"' + (canSelect ? ' checked' : ' disabled') + '>';
+                html += '<span style="font-size:0.85rem;">PR #' + escapeHtml(prNumber) + '</span>';
+                if (sourceBranch) {
+                    html += '<span style="font-size:0.8rem;color:var(--muted);">branch: ' + escapeHtml(sourceBranch) + '</span>';
+                }
+                if (prUrl) {
+                    html += '<a href="' + escapeHtml(prUrl) + '" target="_blank" rel="noopener" style="font-size:0.8rem;color:var(--primary);">Abrir</a>';
                 }
                 html += '</label>';
-                idx++;
+                if (!prUrl) {
+                    html += '<input type="text" data-idx="' + idx + '" class="scan-pr-url-input" placeholder="URL da PR (obrigat├│rio)" style="min-width:220px;font-size:0.8rem;padding:3px 6px;">';
+                }
+            } else {
+                if (Array.isArray(item.candidate_prs) && item.candidate_prs.length > 0) {
+                    html += '<div style="font-size:0.8rem;color:var(--muted);">candidatos: ' + item.candidate_prs.map(function(candidate) {
+                        return 'PR #' + escapeHtml(candidate.pr_number || '-') + ' (' + escapeHtml(candidate.heuristic || '-') + ')';
+                    }).join(', ') + '</div>';
+                }
+                if (item.reason) {
+                    html += '<div style="font-size:0.8rem;color:var(--muted);">motivo: ' + escapeHtml(item.reason) + '</div>';
+                }
             }
             html += '</div>';
-        }
+            html += '</div>';
+        });
         el.scanPrsResultsContainer.innerHTML = html;
     }
 
@@ -2183,40 +2354,48 @@
         if (checkboxes.length === 0) {
             el.scanPrsSaveInfo.hidden = false;
             el.scanPrsSaveInfo.className = 'form-error';
-            el.scanPrsSaveInfo.textContent = 'Nenhum item selecionado.';
+            el.scanPrsSaveInfo.textContent = 'Nenhum metadata com match foi selecionado.';
             return;
         }
-        const toSave = [];
+
+        const links = [];
         for (const cb of checkboxes) {
             const idx = Number(cb.dataset.idx);
-            const match = state.scanPrResults[idx];
-            if (!match) continue;
-            let prUrl = match.pr_url;
+            const decision = state.scanPrResults[idx];
+            if (!decision || decision.status !== 'matched' || !decision.matched_pr) continue;
+
+            const metadataId = String(decision.metadata_id || '').trim();
+            const prNumber = String(decision.matched_pr.pr_number || '').trim();
+            let prUrl = String(decision.matched_pr.pr_url || '').trim();
+
             if (!prUrl) {
                 const urlInput = el.scanPrsResultsContainer.querySelector('.scan-pr-url-input[data-idx="' + idx + '"]');
                 prUrl = urlInput ? String(urlInput.value || '').trim() : '';
             }
-            if (!prUrl) continue;
-            toSave.push({ pr_number: match.pr_number, metadata_id: match.metadata_id, pr_url: prUrl });
+
+            if (!metadataId || !prNumber || !prUrl) continue;
+            links.push({ metadata_id: metadataId, pr_number: prNumber, pr_url: prUrl });
         }
-        if (toSave.length === 0) {
+
+        if (links.length === 0) {
             el.scanPrsSaveInfo.hidden = false;
             el.scanPrsSaveInfo.className = 'form-error';
-            el.scanPrsSaveInfo.textContent = 'Nenhum item com URL válida para salvar.';
+            el.scanPrsSaveInfo.textContent = 'Nenhum link v├ílido para aplicar.';
             return;
         }
+
         el.btnSaveScannedPrs.disabled = true;
         el.scanPrsSaveInfo.hidden = true;
         try {
-            const result = await api.post('/api/repos/' + state.scanPrRepoId + '/save-scanned-prs', { matches: toSave });
+            const result = await api.post('/api/repos/' + state.scanPrRepoId + '/apply-pr-links', { links: links });
             el.scanPrsSaveInfo.hidden = false;
             el.scanPrsSaveInfo.className = 'form-info';
-            el.scanPrsSaveInfo.textContent = result.saved + ' PR(s) salva(s).' + (result.skipped ? ' ' + result.skipped + ' ignorada(s) (duplicata ou inválida).' : '');
+            el.scanPrsSaveInfo.textContent = result.saved + ' v├¡nculo(s) aplicado(s).' + (result.skipped ? ' ' + result.skipped + ' item(ns) ignorado(s).' : '');
             await loadItems();
         } catch (err) {
             el.scanPrsSaveInfo.hidden = false;
             el.scanPrsSaveInfo.className = 'form-error';
-            el.scanPrsSaveInfo.textContent = err.message || 'Erro ao salvar';
+            el.scanPrsSaveInfo.textContent = err.message || 'Erro ao aplicar v├¡nculos';
         } finally {
             el.btnSaveScannedPrs.disabled = false;
         }
@@ -2324,7 +2503,7 @@
         }
     }
 
-    // ── Init ──────────────────────────────────────────────────────────────────
+    // ÔöÇÔöÇ Init ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     async function init() {
         initThemeToggle();
         ensureBulkRows();

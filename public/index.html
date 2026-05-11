@@ -77,10 +77,10 @@
                                         <option value="">Repo salvo...</option>
                                     </select>
                                 </div>
-                                <input id="f-commit-hash" type="text" placeholder="Hash do commit (ex.: a1b2c3d4)">
+                                <input id="f-commit-hash" type="text" placeholder="Hash(s) do commit (ex.: a1b2c3d4 ou a1b2c3d4, e5f6g7h8)">
                                 <button type="button" id="btn-load-commit" class="btn-secondary">Buscar no commit</button>
                             </div>
-                            <p class="field-hint">Busca os arquivos alterados no commit e preenche a lista de metadados automaticamente.</p>
+                            <p class="field-hint">Busca os arquivos alterados nos commits informados e preenche a lista de metadados automaticamente.</p>
                             <div id="commit-info" class="form-info" hidden></div>
                         </div>
 
@@ -286,15 +286,14 @@
                 <form id="scan-form" novalidate autocomplete="off">
                     <div class="form-grid">
                         <label class="field field-full">
-                            <span>Pessoa salva (opcional)</span>
-                            <select id="scan-person-select">
-                                <option value="">Selecionar pessoa...</option>
-                            </select>
+                            <span>Pessoas salvas (opcional)</span>
+                            <select id="scan-person-select" multiple size="4"></select>
+                            <p class="field-hint">Use Ctrl/Cmd para selecionar mais de uma pessoa salva.</p>
                         </label>
 
                         <label class="field field-full">
-                            <span>Email do autor *</span>
-                            <input id="scan-email" type="email" required placeholder="Ex.: dev@company.com">
+                            <span>Emails adicionais (opcional)</span>
+                            <input id="scan-email" type="text" placeholder="Ex.: dev@company.com, dev2@company.com">
                         </label>
 
                         <label class="field field-full">
@@ -338,10 +337,18 @@
                     <strong id="scan-count-label">0 commits</strong>
                 </div>
 
+                <div class="scan-actions">
+                    <button type="button" id="btn-scan-select-all" class="btn-secondary btn-sm">Selecionar todos</button>
+                    <button type="button" id="btn-scan-clear-selection" class="btn-secondary btn-sm">Limpar selecao</button>
+                    <button type="button" id="btn-use-all-commits" class="btn-primary btn-sm">Usar todos</button>
+                    <button type="button" id="btn-use-selected-commits" class="btn-primary btn-sm">Usar selecionados</button>
+                </div>
+
                 <div class="table-wrap">
                     <table class="scan-results-table">
                         <thead>
                             <tr>
+                                <th>Sel.</th>
                                 <th>Hash</th>
                                 <th>Data</th>
                                 <th>Autor</th>
@@ -486,18 +493,28 @@
                         </label>
 
                         <label class="field">
-                            <span>Período (dias para trás)</span>
-                            <input id="scan-prs-since-days" type="number" min="1" max="3650" value="90" placeholder="90">
+                            <span>Frente *</span>
+                            <select id="scan-prs-front-select"></select>
                         </label>
 
                         <label class="field">
-                            <span>Filtrar por branch (opcional)</span>
-                            <input id="scan-prs-branch-filter" type="text" placeholder="Ex.: forno, main, SWSS-1721">
+                            <span>Branches alvo *</span>
+                            <input id="scan-prs-target-branches" type="text" placeholder="Ex.: forno/staging, main">
                         </label>
 
                         <label class="field">
-                            <span>Filtrar por autor (opcional)</span>
-                            <input id="scan-prs-author-filter" type="text" placeholder="Nome ou email do autor do merge commit">
+                            <span>Data inicial (opcional)</span>
+                            <input id="scan-prs-since-date" type="date">
+                        </label>
+
+                        <label class="field">
+                            <span>Data final (opcional)</span>
+                            <input id="scan-prs-until-date" type="date">
+                        </label>
+
+                        <label class="field field-full" style="display:flex; align-items:center; gap:8px;">
+                            <input id="scan-prs-include-linked" type="checkbox">
+                            <span>Incluir metadados que ja possuem PR vinculado</span>
                         </label>
                     </div>
 
@@ -505,7 +522,7 @@
                     <div id="scan-prs-info" class="form-info" hidden></div>
 
                     <div class="form-actions">
-                        <button type="submit" class="btn-primary" id="btn-scan-prs">Varrer merge commits</button>
+                        <button type="submit" class="btn-primary" id="btn-scan-prs">Descobrir PRs</button>
                     </div>
                 </form>
             </section>
@@ -515,6 +532,11 @@
                     <h2>Matches encontrados</h2>
                     <strong id="scan-prs-count-label"></strong>
                 </div>
+
+                <p style="color: var(--muted); margin: 0 0 8px; font-size: 0.85rem;">
+                    Status: <strong>Matched</strong> (vinculo pronto), <strong>Sem match</strong> (sem evidencia),
+                    <strong>Conflito</strong> (mais de um PR candidato), <strong>Erro</strong> (falha de processamento).
+                </p>
 
                 <p style="color: var(--muted); margin: 0 0 12px; font-size: 0.875rem;">
                     Marque os vínculos que deseja salvar. PRs já cadastrados para o mesmo metadata serão ignorados automaticamente.
