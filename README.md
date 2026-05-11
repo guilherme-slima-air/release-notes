@@ -38,3 +38,30 @@ Sem essas medidas, existe risco de exposicao de dados e uso indevido da aplicaca
 ## Banco de dados local
 
 No primeiro start, o arquivo `release.db` e as tabelas sao criados automaticamente.
+
+## Busca por commits de varias pessoas
+
+Na aba `Busca por commit`, e possivel selecionar mais de uma pessoa salva e consultar commits de todos os autores ao mesmo tempo.
+
+- Selecionar varias pessoas no campo de pessoas salvas usando `Ctrl`/`Cmd`
+- Informar emails adicionais manualmente, separados por virgula, espaco ou quebra de linha
+- Usar `Selecionar todos` e `Limpar selecao` na grade de resultados
+- Acionar `Usar todos` para importar todos os commits encontrados
+- Acionar `Usar selecionados` para importar apenas os commits marcados
+
+O fluxo continua compatível com a busca por uma unica pessoa e com o atalho `Usar commit` de cada linha.
+
+## Importacao de metadados por multiplos commits
+
+O fluxo `Incluir metadados` suporta importacao por hash unico e por lote.
+
+- Hash unico: continua usando o caminho tradicional e permanece compativel com o comportamento anterior.
+- Multiplos hashes: informe hashes separados por espaco, virgula ou quebra de linha no campo de commit.
+- Limite operacional: ate 50 commits por importacao.
+- Deduplicacao: metadados repetidos entre commits sao consolidados automaticamente por tipo e nome.
+
+No fluxo `Busca por commit`, tambem e possivel:
+
+- Selecionar varios commits na grade (checkbox por linha)
+- Usar `Selecionar todos` e `Limpar selecao`
+- Acionar `Usar selecionados` para importar tudo em lote no modulo de metadados

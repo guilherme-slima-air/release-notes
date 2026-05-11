@@ -7,6 +7,21 @@ const crypto = require('crypto');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
+const {
+    buildMetadataItemsFromFiles,
+    mergeCommitMetadataEntries
+} = require('./lib/commit-metadata');
+const {
+    normalizeBranchList,
+    parseOptionalDate,
+    validateDateRange,
+    parseMergePullRequest,
+    parsePullRequestFromMessage,
+    classifyMetadataDecision,
+    buildMetadataCandidateQuery,
+    validateTargetBranches,
+    extractOrgRepoFromRemote
+} = require('./lib/pr-discovery');
 
 const execFileAsync = promisify(execFile);
 
@@ -794,6 +809,249 @@ function extractMetadataName(filePath) {
     };
 }
 
+function normalizeAuthorEmail(value) {
+    return String(value || '').trim().toLowerCase();
+}
+
+function normalizeAuthorEmailList(values) {
+    const items = [];
+    const source = Array.isArray(values) ? values : [values];
+
+    source.forEach(function(value) {
+        String(value || '')
+            .split(/[\s,;]+/)
+            .map(function(part) { return normalizeAuthorEmail(part); })
+            .filter(Boolean)
+            .forEach(function(email) {
+                items.push(email);
+            });
+    });
+
+    return Array.from(new Set(items));
+}
+
+function parseTargetBranchesInput(value) {
+    if (Array.isArray(value)) {
+        return normalizeBranchList(value);
+    }
+
+    const raw = String(value || '');
+    return normalizeBranchList(raw.split(/[\s,;\n\r]+/));
+}
+
+function buildMetadataLogArgs(branch, metadataName, options) {
+    const args = [
+        'log',
+        branch,
+        '--format=%H\t%s\t%an\t%ae\t%aI',
+        '--',
+        metadataName
+    ];
+
+    if (options && options.mergesOnly) {
+        args.splice(2, 0, '--merges');
+    }
+
+    if (options && options.since) {
+        args.push('--since=' + options.since);
+    }
+    if (options && options.until) {
+        args.push('--until=' + options.until);
+    }
+
+    return args;
+}
+
+function parseMetadataLogLine(line) {
+    const parts = String(line || '').split('\t');
+    if (parts.length < 2) return null;
+
+    return {
+        commit_sha: String(parts[0] || '').trim(),
+        subject: String(parts[1] || '').trim(),
+        author_name: String(parts[2] || '').trim(),
+        author_email: String(parts[3] || '').trim(),
+        authored_at: String(parts[4] || '').trim()
+    };
+}
+
+function buildScanCommitArgs(authorEmail, since, until, branch) {
+    const args = [
+        'log', '--all', '--name-only',
+        `--author=${authorEmail}`,
+        '--pretty=format:__COMMIT__%H%x09%aI%x09%an%x09%ae'
+    ];
+
+    if (since) args.push(`--since=${since}`);
+    if (until) args.push(`--until=${until}`);
+    if (branch) args.push(branch);
+
+    return args;
+}
+
+function parseScanCommitRows(stdout) {
+    const rows = String(stdout || '').split('\n');
+    const commits = [];
+    let current = null;
+
+    for (const line of rows) {
+        if (line.startsWith('__COMMIT__')) {
+            if (current) commits.push(current);
+            const parts = line.slice(10).split('\t');
+            current = {
+                hash: parts[0] || '',
+                authored_at: parts[1] || '',
+                author_name: parts[2] || '',
+                author_email: parts[3] || '',
+                files: []
+            };
+            continue;
+        }
+        if (current && line.trim()) {
+            current.files.push(line.trim());
+        }
+    }
+
+    if (current) commits.push(current);
+    return commits;
+}
+
+async function readCommitsForAuthor(repoPath, authorEmail, filters) {
+    const safeEmail = normalizeAuthorEmail(authorEmail);
+    if (!safeEmail) return [];
+
+    const since = String(filters?.since || '').trim();
+    const until = String(filters?.until || '').trim();
+    const branch = String(filters?.branch || '').trim();
+
+    if (branch) {
+        if (branch.startsWith('-') || !/^[a-zA-Z0-9/_.\-@]+$/.test(branch)) {
+            const error = new Error('branch invalido');
+            error.status = 400;
+            throw error;
+        }
+    }
+
+    const { stdout } = await runGit(repoPath, buildScanCommitArgs(safeEmail, since, until, branch));
+    const commits = parseScanCommitRows(stdout);
+
+    return commits
+        .filter(function(commit) {
+            return normalizeAuthorEmail(commit.author_email) === safeEmail;
+        })
+        .map(function(commit) {
+            return {
+                hash: commit.hash,
+                authored_at: commit.authored_at,
+                author_name: commit.author_name,
+                author_email: commit.author_email,
+                metadata_items: buildMetadataItemsFromFiles(commit.files, extractMetadataName)
+            };
+        })
+        .filter(function(commit) {
+            return commit.metadata_items.length > 0;
+        });
+}
+
+function mergeScanCommitResults(commitGroups) {
+    const merged = new Map();
+
+    (Array.isArray(commitGroups) ? commitGroups : []).forEach(function(commit) {
+        if (!commit || !commit.hash) return;
+
+        const existing = merged.get(commit.hash);
+        if (!existing) {
+            merged.set(commit.hash, {
+                hash: commit.hash,
+                authored_at: commit.authored_at || '',
+                author_name: commit.author_name || '',
+                author_email: commit.author_email || '',
+                metadata_items: Array.isArray(commit.metadata_items) ? commit.metadata_items.slice() : []
+            });
+            return;
+        }
+
+        const mergedMetadata = mergeCommitMetadataEntries([
+            { metadata_items: existing.metadata_items },
+            { metadata_items: commit.metadata_items }
+        ]);
+        existing.metadata_items = mergedMetadata.metadata_items;
+        if (!existing.authored_at && commit.authored_at) existing.authored_at = commit.authored_at;
+        if (!existing.author_name && commit.author_name) existing.author_name = commit.author_name;
+        if (!existing.author_email && commit.author_email) existing.author_email = commit.author_email;
+    });
+
+    return Array.from(merged.values()).sort(function(a, b) {
+        const dateCompare = String(b.authored_at || '').localeCompare(String(a.authored_at || ''));
+        if (dateCompare !== 0) return dateCompare;
+        return String(a.hash || '').localeCompare(String(b.hash || ''));
+    });
+}
+
+async function readCommitsForAuthors(repoPath, authorEmails, filters) {
+    const safeEmails = normalizeAuthorEmailList(authorEmails);
+    const groups = await Promise.all(safeEmails.map(function(email) {
+        return readCommitsForAuthor(repoPath, email, filters);
+    }));
+
+    const commits = mergeScanCommitResults(groups.flat());
+    return {
+        author_emails: safeEmails,
+        authors_read: safeEmails.length,
+        commits: commits,
+        total: commits.length
+    };
+}
+
+function validateCommitHash(value) {
+    return /^[0-9a-f]{7,40}$/i.test(String(value || '').trim());
+}
+
+async function readCommitMetadata(repoPath, commitHash) {
+    const safeHash = String(commitHash || '').trim();
+    const { stdout } = await runGit(repoPath, ['show', '--pretty=format:', '--name-only', safeHash]);
+    const files = String(stdout || '')
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean);
+
+    const metadataItems = buildMetadataItemsFromFiles(files, extractMetadataName);
+
+    return {
+        commit_hash: safeHash,
+        total_files: files.length,
+        total_metadata: metadataItems.length,
+        metadata_items: metadataItems
+    };
+}
+
+async function readMultipleCommitMetadata(repoPath, commitHashes) {
+    const reads = await Promise.all(commitHashes.map(function(hash) {
+        return readCommitMetadata(repoPath, hash);
+    }));
+
+    const merged = mergeCommitMetadataEntries(reads);
+    const totalFiles = reads.reduce(function(sum, item) {
+        return sum + Number(item.total_files || 0);
+    }, 0);
+
+    return {
+        commit_hashes: commitHashes,
+        commits_read: reads.length,
+        total_files: totalFiles,
+        total_metadata: merged.metadata_items.length,
+        duplicate_metadata: merged.duplicate_count,
+        metadata_items: merged.metadata_items,
+        commits: reads.map(function(item) {
+            return {
+                commit_hash: item.commit_hash,
+                total_files: item.total_files,
+                total_metadata: item.total_metadata
+            };
+        })
+    };
+}
+
 migrateLegacyMetadataNames();
 consolidateDuplicateMetadatas();
 consolidateDuplicatePullRequests();
@@ -997,29 +1255,12 @@ app.post('/api/metadata-from-commit', async (req, res) => {
     try {
         const repoPath = assertValidRepoPath(req.body?.repo_path);
         const commitHash = String(req.body?.commit_hash || '').trim();
-        if (!/^[0-9a-f]{7,40}$/i.test(commitHash)) {
+        if (!validateCommitHash(commitHash)) {
             return res.status(400).json({ error: 'commit_hash invalido' });
         }
 
-        const { stdout } = await runGit(repoPath, ['show', '--pretty=format:', '--name-only', commitHash]);
-        const files = String(stdout || '')
-            .split(/\r?\n/)
-            .map(line => line.trim())
-            .filter(Boolean);
-
-        const metadataItems = Array.from(new Map(
-            files
-                .map(extractMetadataName)
-                .filter(item => item.name)
-                .map(item => [String(item.type).toLowerCase() + '::' + String(item.name).toLowerCase(), item])
-        ).values());
-
-        res.json({
-            commit_hash: commitHash,
-            total_files: files.length,
-            total_metadata: metadataItems.length,
-            metadata_items: metadataItems
-        });
+        const payload = await readCommitMetadata(repoPath, commitHash);
+        res.json(payload);
     } catch (error) {
         if (error && Number.isInteger(error.status)) {
             return res.status(error.status).json({ error: error.message });
@@ -1034,6 +1275,48 @@ app.post('/api/metadata-from-commit', async (req, res) => {
         }
 
         res.status(500).json({ error: error?.message || 'Erro ao ler commit' });
+    }
+});
+
+app.post('/api/metadata-from-commits', async (req, res) => {
+    try {
+        const repoPath = assertValidRepoPath(req.body?.repo_path);
+        const commitHashesRaw = Array.isArray(req.body?.commit_hashes) ? req.body.commit_hashes : [];
+        const normalized = commitHashesRaw
+            .map(function(hash) { return String(hash || '').trim(); })
+            .filter(Boolean);
+        const commitHashes = Array.from(new Set(normalized));
+
+        if (commitHashes.length === 0) {
+            return res.status(400).json({ error: 'commit_hashes obrigatorio' });
+        }
+        if (commitHashes.length > 50) {
+            return res.status(400).json({ error: 'Maximo de 50 commits por requisicao' });
+        }
+
+        const invalidHash = commitHashes.find(function(hash) {
+            return !validateCommitHash(hash);
+        });
+        if (invalidHash) {
+            return res.status(400).json({ error: 'commit_hash invalido: ' + invalidHash });
+        }
+
+        const payload = await readMultipleCommitMetadata(repoPath, commitHashes);
+        res.json(payload);
+    } catch (error) {
+        if (error && Number.isInteger(error.status)) {
+            return res.status(error.status).json({ error: error.message });
+        }
+        if (error && error.code === 'ENOENT') {
+            return res.status(500).json({ error: 'git nao encontrado no sistema' });
+        }
+
+        const stderr = String(error?.stderr || '').trim();
+        if (stderr) {
+            return res.status(500).json({ error: stderr });
+        }
+
+        res.status(500).json({ error: error?.message || 'Erro ao ler commits' });
     }
 });
 
@@ -1700,78 +1983,25 @@ app.post('/api/scan-commit-authors', async (req, res) => {
 // ── Scan commits by author email ──────────────────────────────────────────────
 app.post('/api/scan-commits', async (req, res) => {
     try {
-        const email = String(req.body?.email || '').trim().toLowerCase();
-        if (!email) {
-            return res.status(400).json({ error: 'email obrigatorio' });
-        }
-
         const repoPath = assertValidRepoPath(String(req.body?.repo_path || '').trim());
 
-        const args = [
-            'log', '--all', '--name-only',
-            `--author=${email}`,
-            '--pretty=format:__COMMIT__%H%x09%aI%x09%an%x09%ae'
-        ];
+        const requestedEmails = normalizeAuthorEmailList([
+            req.body?.author_email,
+            req.body?.email,
+            req.body?.author_emails
+        ]);
 
-        const since = String(req.body?.since || '').trim();
-        const until = String(req.body?.until || '').trim();
-        const branch = String(req.body?.branch || '').trim();
-
-        if (since) args.push(`--since=${since}`);
-        if (until) args.push(`--until=${until}`);
-        if (branch) {
-            if (branch.startsWith('-') || !/^[a-zA-Z0-9/_.\-@]+$/.test(branch)) {
-                return res.status(400).json({ error: 'branch invalido' });
-            }
-            args.push(branch);
+        if (requestedEmails.length === 0) {
+            return res.status(400).json({ error: 'author_emails obrigatorio' });
         }
 
-        const { stdout } = await runGit(repoPath, args);
+        const payload = await readCommitsForAuthors(repoPath, requestedEmails, {
+            since: req.body?.since,
+            until: req.body?.until,
+            branch: req.body?.branch
+        });
 
-        const rows = String(stdout || '').split('\n');
-        const commits = [];
-        let current = null;
-
-        for (const line of rows) {
-            if (line.startsWith('__COMMIT__')) {
-                if (current) commits.push(current);
-                const parts = line.slice(10).split('\t');
-                current = {
-                    hash: parts[0] || '',
-                    authored_at: parts[1] || '',
-                    author_name: parts[2] || '',
-                    author_email: parts[3] || '',
-                    files: []
-                };
-                continue;
-            }
-            if (current && line.trim()) {
-                current.files.push(line.trim());
-            }
-        }
-        if (current) commits.push(current);
-
-        // Exact email match (git --author is a regex, this ensures precision)
-        const filtered = commits.filter(c => c.author_email.toLowerCase() === email);
-
-        const result = filtered.map(commit => {
-            const metadataItems = Array.from(new Map(
-                commit.files
-                    .map(extractMetadataName)
-                    .filter(item => item.name)
-                    .map(item => [String(item.type).toLowerCase() + '::' + String(item.name).toLowerCase(), item])
-            ).values());
-
-            return {
-                hash: commit.hash,
-                authored_at: commit.authored_at,
-                author_name: commit.author_name,
-                author_email: commit.author_email,
-                metadata_items: metadataItems
-            };
-        }).filter(c => c.metadata_items.length > 0);
-
-        res.json({ commits: result, total: result.length });
+        res.json(payload);
     } catch (error) {
         if (error && Number.isInteger(error.status)) {
             return res.status(error.status).json({ error: error.message });
@@ -1785,6 +2015,247 @@ app.post('/api/scan-commits', async (req, res) => {
         }
         res.status(500).json({ error: error?.message || 'Erro ao ler commits' });
     }
+});
+
+app.post('/api/repos/:id/discover-pr-links', async (req, res) => {
+    try {
+        const repoId = Number(req.params.id);
+        if (!Number.isInteger(repoId) || repoId < 1) {
+            return res.status(400).json({ error: 'id invalido' });
+        }
+
+        const repo = db.prepare('SELECT * FROM repos WHERE id = ?').get(repoId);
+        if (!repo) {
+            return res.status(404).json({ error: 'Repositorio nao encontrado' });
+        }
+
+        const frontId = parsePositiveInt(req.body?.front_id);
+        if (!frontId) {
+            return res.status(400).json({ error: 'front_id obrigatorio' });
+        }
+        if (!selectFrontById.get(frontId)) {
+            return res.status(404).json({ error: 'Frente nao encontrada' });
+        }
+
+        const targetBranches = parseTargetBranchesInput(req.body?.target_branches);
+        if (targetBranches.length === 0) {
+            return res.status(400).json({ error: 'target_branches obrigatorio' });
+        }
+
+        const since = parseOptionalDate(req.body?.since);
+        const until = parseOptionalDate(req.body?.until);
+        if (since === undefined || until === undefined) {
+            return res.status(422).json({ error: 'since/until devem seguir o formato YYYY-MM-DD' });
+        }
+
+        const rangeCheck = validateDateRange(since, until);
+        if (!rangeCheck.ok) {
+            return res.status(422).json({ error: rangeCheck.error });
+        }
+
+        const includeAlreadyLinked = parseOptionalBoolean(req.body?.include_already_linked) === true;
+        const repoPath = assertValidRepoPath(repo.repo_path);
+
+        let remote;
+        try {
+            const { stdout: remoteOut } = await runGit(repoPath, ['remote', 'get-url', 'origin']);
+            remote = String(remoteOut || '').trim();
+        } catch {
+            return res.status(422).json({ error: 'Repositorio sem remote origin configurado' });
+        }
+
+        const branchValidation = await validateTargetBranches(runGit, repoPath, targetBranches);
+        if (!branchValidation.ok) {
+            return res.status(422).json({ error: branchValidation.error });
+        }
+
+        const orgRepo = extractOrgRepoFromRemote(remote);
+        const prBaseUrl = orgRepo ? 'https://github.com/' + orgRepo + '/pull/' : null;
+
+        const selectCandidates = db.prepare(buildMetadataCandidateQuery(includeAlreadyLinked));
+        const metadataCandidates = selectCandidates.all(frontId);
+
+        const startedAt = Date.now();
+        const results = [];
+
+        for (const metadata of metadataCandidates) {
+            try {
+                const evidences = [];
+
+                for (const branch of branchValidation.branches) {
+                    const { stdout } = await runGit(repoPath, buildMetadataLogArgs(branch, metadata.metadata_name, {
+                        mergesOnly: true,
+                        since,
+                        until
+                    }));
+
+                    const lines = String(stdout || '').split(/\r?\n/).map(function(line) { return line.trim(); }).filter(Boolean);
+                    lines.forEach(function(line) {
+                        const parsedLine = parseMetadataLogLine(line);
+                        if (!parsedLine || !parsedLine.commit_sha) return;
+                        const mergePr = parseMergePullRequest(parsedLine.subject);
+                        if (!mergePr) return;
+
+                        evidences.push({
+                            metadata_id: metadata.metadata_id,
+                            commit_sha: parsedLine.commit_sha,
+                            pr_number: mergePr.pr_number,
+                            source_branch: mergePr.source_branch || branch,
+                            heuristic: 'merge_commit',
+                            subject: parsedLine.subject,
+                            author_name: parsedLine.author_name,
+                            author_email: parsedLine.author_email,
+                            pr_url: prBaseUrl ? prBaseUrl + mergePr.pr_number : null
+                        });
+                    });
+                }
+
+                if (evidences.length === 0) {
+                    for (const branch of branchValidation.branches) {
+                        const { stdout } = await runGit(repoPath, buildMetadataLogArgs(branch, metadata.metadata_name, {
+                            since,
+                            until
+                        }));
+
+                        const lines = String(stdout || '').split(/\r?\n/).map(function(line) { return line.trim(); }).filter(Boolean);
+                        lines.forEach(function(line) {
+                            const parsedLine = parseMetadataLogLine(line);
+                            if (!parsedLine || !parsedLine.commit_sha) return;
+
+                            const prNumbers = parsePullRequestFromMessage(parsedLine.subject);
+                            prNumbers.forEach(function(prNumber) {
+                                evidences.push({
+                                    metadata_id: metadata.metadata_id,
+                                    commit_sha: parsedLine.commit_sha,
+                                    pr_number: prNumber,
+                                    source_branch: branch,
+                                    heuristic: 'commit_message',
+                                    subject: parsedLine.subject,
+                                    author_name: parsedLine.author_name,
+                                    author_email: parsedLine.author_email,
+                                    pr_url: prBaseUrl ? prBaseUrl + prNumber : null
+                                });
+                            });
+                        });
+                    }
+                }
+
+                results.push(classifyMetadataDecision(metadata, evidences));
+            } catch (error) {
+                results.push({
+                    metadata_id: metadata.metadata_id,
+                    metadata_name: metadata.metadata_name,
+                    status: 'error',
+                    heuristic_used: null,
+                    matched_pr: null,
+                    candidate_prs: [],
+                    reason: String(error?.message || 'Erro ao analisar metadata')
+                });
+            }
+        }
+
+        const summary = {
+            total_candidates: metadataCandidates.length,
+            total_matched: results.filter(function(item) { return item.status === 'matched'; }).length,
+            total_no_match: results.filter(function(item) { return item.status === 'no_match'; }).length,
+            total_conflict: results.filter(function(item) { return item.status === 'conflict'; }).length,
+            total_error: results.filter(function(item) { return item.status === 'error'; }).length,
+            duration_ms: Date.now() - startedAt,
+            target_branches: branchValidation.branches,
+            since_utc: since ? since + 'T00:00:00.000Z' : null,
+            until_utc: until ? until + 'T23:59:59.999Z' : null
+        };
+
+        return res.json({ summary, results, pr_base_url: prBaseUrl });
+    } catch (error) {
+        if (error && Number.isInteger(error.status)) {
+            return res.status(error.status).json({ error: error.message });
+        }
+        if (error && error.code === 'ENOENT') {
+            return res.status(500).json({ error: 'git nao encontrado no sistema' });
+        }
+        const stderr = String(error?.stderr || '').trim();
+        if (stderr) return res.status(500).json({ error: stderr });
+        return res.status(500).json({ error: error?.message || 'Erro ao descobrir PRs' });
+    }
+});
+
+app.post('/api/repos/:id/apply-pr-links', (req, res) => {
+    const repoId = Number(req.params.id);
+    if (!Number.isInteger(repoId) || repoId < 1) return res.status(400).json({ error: 'id invalido' });
+
+    const repo = db.prepare('SELECT id FROM repos WHERE id = ?').get(repoId);
+    if (!repo) return res.status(404).json({ error: 'Repositorio nao encontrado' });
+
+    const links = Array.isArray(req.body?.links) ? req.body.links : [];
+    if (links.length === 0) return res.status(400).json({ error: 'links obrigatorio' });
+
+    const byMetadata = new Map();
+    links.forEach(function(link) {
+        const metadataId = String(link?.metadata_id || '').trim();
+        const prNumber = String(link?.pr_number || '').trim();
+        if (!metadataId || !prNumber) return;
+        if (!byMetadata.has(metadataId)) byMetadata.set(metadataId, new Set());
+        byMetadata.get(metadataId).add(prNumber);
+    });
+
+    const ambiguousMetadata = new Set();
+    byMetadata.forEach(function(prNumbers, metadataId) {
+        if (prNumbers.size > 1) ambiguousMetadata.add(metadataId);
+    });
+
+    let saved = 0;
+    let skipped = 0;
+    const now = new Date().toISOString();
+
+    const saveMany = db.transaction(() => {
+        for (const item of links) {
+            const metadataId = String(item?.metadata_id || '').trim();
+            const prNumber = String(item?.pr_number || '').trim();
+            const rawUrl = String(item?.pr_url || '').trim();
+
+            if (!metadataId || !prNumber || !rawUrl) {
+                skipped += 1;
+                continue;
+            }
+
+            if (ambiguousMetadata.has(metadataId)) {
+                skipped += 1;
+                continue;
+            }
+
+            const metadata = selectMetadataById.get(metadataId);
+            if (!metadata) {
+                skipped += 1;
+                continue;
+            }
+
+            let parsedUrl;
+            try {
+                parsedUrl = new URL(rawUrl);
+                if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+                    skipped += 1;
+                    continue;
+                }
+            } catch {
+                skipped += 1;
+                continue;
+            }
+
+            const normalizedUrl = parsedUrl.toString();
+            const existing = selectPullRequestByMetadataAndUrl.get(metadataId, normalizedUrl);
+            if (existing) {
+                skipped += 1;
+                continue;
+            }
+
+            insertPullRequest.run(metadataId, 'PR #' + prNumber, normalizedUrl, now);
+            saved += 1;
+        }
+    });
+
+    saveMany();
+    res.json({ saved, skipped });
 });
 
 // ── Varredura de PRs a partir de merge commits ────────────────────────────────

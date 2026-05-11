@@ -808,6 +808,17 @@ button:hover {
     overflow-x: auto;
 }
 
+.scan-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+#scan-person-select[multiple] {
+    min-height: 120px;
+}
+
 .scan-results-table {
     width: 100%;
     border-collapse: collapse;
@@ -823,6 +834,12 @@ button:hover {
     vertical-align: top;
 }
 
+.scan-results-table th:first-child,
+.scan-results-table td:first-child {
+    width: 48px;
+    text-align: center;
+}
+
 .scan-results-table th {
     font-size: 0.8rem;
     text-transform: uppercase;
@@ -835,8 +852,25 @@ button:hover {
     border-bottom: none;
 }
 
+.scan-results-table tbody tr:nth-child(odd) td {
+    background: rgba(15, 107, 77, 0.03);
+}
+
 .scan-results-table tbody tr:hover td {
     background: rgba(15, 107, 77, 0.04);
+}
+
+.scan-result-row {
+    cursor: pointer;
+}
+
+.scan-result-row-selected td,
+.scan-result-row-selected:nth-child(odd) td {
+    background: rgba(26, 188, 156, 0.16);
+}
+
+.scan-result-row-selected:hover td {
+    background: rgba(26, 188, 156, 0.22);
 }
 
 .scan-hash {

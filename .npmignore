@@ -1,0 +1,15 @@
+node_modules/
+specs/
+.vscode/
+.specify/
+release.db
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+.env*
+coverage/
+dist/
+build/

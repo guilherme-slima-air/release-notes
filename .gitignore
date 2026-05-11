@@ -30,3 +30,6 @@ build/
 Thumbs.db
 .vscode/
 !.vscode/extensions.json
+.idea/
+*.tmp
+*.swp

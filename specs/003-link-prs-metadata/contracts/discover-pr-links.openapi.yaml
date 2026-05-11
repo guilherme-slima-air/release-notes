@@ -1,0 +1,255 @@
+openapi: 3.0.3
+info:
+  title: Release Notes Hub - Discover PR Links
+  version: 1.0.0
+paths:
+  /api/repos/{id}/discover-pr-links:
+    post:
+      summary: Discover PR candidates for already-registered metadata
+      description: |
+        Runs PR discovery using local git history only, scoped by repository, front,
+        selected target branches (environment branches), and optional date window.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+          description: Repository ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [front_id, target_branches]
+              properties:
+                front_id:
+                  type: integer
+                  minimum: 1
+                target_branches:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items:
+                    type: string
+                    minLength: 1
+                since:
+                  type: string
+                  format: date
+                until:
+                  type: string
+                  format: date
+                include_already_linked:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Discovery completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - summary
+                  - results
+                properties:
+                  summary:
+                    type: object
+                    required:
+                      - total_candidates
+                      - total_matched
+                      - total_no_match
+                      - total_conflict
+                      - total_error
+                      - duration_ms
+                    properties:
+                      total_candidates:
+                        type: integer
+                      total_matched:
+                        type: integer
+                      total_no_match:
+                        type: integer
+                      total_conflict:
+                        type: integer
+                      total_error:
+                        type: integer
+                      duration_ms:
+                        type: integer
+                      target_branches:
+                        type: array
+                        items:
+                          type: string
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - metadata_id
+                        - metadata_name
+                        - status
+                        - candidate_prs
+                      properties:
+                        metadata_id:
+                          type: integer
+                        metadata_name:
+                          type: string
+                        status:
+                          type: string
+                          enum: [matched, no_match, conflict, error]
+                        heuristic_used:
+                          type: string
+                          nullable: true
+                          enum: [merge_commit, commit_message, null]
+                        matched_pr:
+                          type: object
+                          nullable: true
+                          properties:
+                            pr_number:
+                              type: string
+                            pr_url:
+                              type: string
+                              nullable: true
+                            source_branch:
+                              type: string
+                            commit_sha:
+                              type: string
+                        candidate_prs:
+                          type: array
+                          items:
+                            type: object
+                            required: [pr_number, heuristic]
+                            properties:
+                              pr_number:
+                                type: string
+                              heuristic:
+                                type: string
+                                enum: [merge_commit, commit_message]
+                              source_branch:
+                                type: string
+                              commit_sha:
+                                type: string
+                              pr_url:
+                                type: string
+                                nullable: true
+                        reason:
+                          type: string
+                          nullable: true
+        '400':
+          description: Invalid payload or filters.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
+        '404':
+          description: Repository/front not found.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
+        '422':
+          description: Invalid branch selection or date range.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
+        '500':
+          description: Local git execution error.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
+
+  /api/repos/{id}/apply-pr-links:
+    post:
+      summary: Persist selected PR links for metadata
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [links]
+              properties:
+                links:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [metadata_id, pr_number, pr_url]
+                    properties:
+                      metadata_id:
+                        type: integer
+                        minimum: 1
+                      pr_number:
+                        type: string
+                      pr_url:
+                        type: string
+                        format: uri
+      responses:
+        '200':
+          description: Apply completed with dedup summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [saved, skipped]
+                properties:
+                  saved:
+                    type: integer
+                  skipped:
+                    type: integer
+        '400':
+          description: Invalid payload.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
+        '404':
+          description: Repository or metadata not found.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
+        '500':
+          description: Persistence error.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
