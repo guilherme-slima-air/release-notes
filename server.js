@@ -2053,6 +2053,12 @@ app.post('/api/repos/:id/discover-pr-links', async (req, res) => {
             return res.status(422).json({ error: rangeCheck.error });
         }
 
+        const requestedEmails = normalizeAuthorEmailList([
+            req.body?.author_email,
+            req.body?.author_emails
+        ]);
+        const authorFilterSet = requestedEmails.length ? new Set(requestedEmails) : null;
+
         const includeAlreadyLinked = parseOptionalBoolean(req.body?.include_already_linked) === true;
         const repoPath = assertValidRepoPath(repo.repo_path);
 
@@ -2093,6 +2099,7 @@ app.post('/api/repos/:id/discover-pr-links', async (req, res) => {
                     lines.forEach(function(line) {
                         const parsedLine = parseMetadataLogLine(line);
                         if (!parsedLine || !parsedLine.commit_sha) return;
+                        if (authorFilterSet && !authorFilterSet.has(normalizeAuthorEmail(parsedLine.author_email))) return;
                         const mergePr = parseMergePullRequest(parsedLine.subject);
                         if (!mergePr) return;
 
@@ -2121,6 +2128,7 @@ app.post('/api/repos/:id/discover-pr-links', async (req, res) => {
                         lines.forEach(function(line) {
                             const parsedLine = parseMetadataLogLine(line);
                             if (!parsedLine || !parsedLine.commit_sha) return;
+                            if (authorFilterSet && !authorFilterSet.has(normalizeAuthorEmail(parsedLine.author_email))) return;
 
                             const prNumbers = parsePullRequestFromMessage(parsedLine.subject);
                             prNumbers.forEach(function(prNumber) {
@@ -2162,6 +2170,7 @@ app.post('/api/repos/:id/discover-pr-links', async (req, res) => {
             total_error: results.filter(function(item) { return item.status === 'error'; }).length,
             duration_ms: Date.now() - startedAt,
             target_branches: branchValidation.branches,
+            author_emails: requestedEmails,
             since_utc: since ? since + 'T00:00:00.000Z' : null,
             until_utc: until ? until + 'T23:59:59.999Z' : null
         };

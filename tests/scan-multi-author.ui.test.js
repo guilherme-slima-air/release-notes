@@ -37,6 +37,8 @@ test('scan-pr UI includes front, target branches and date window controls', func
     assert.match(html, /id="scan-prs-target-branches"/);
     assert.match(html, /id="scan-prs-since-date"/);
     assert.match(html, /id="scan-prs-until-date"/);
+    assert.match(html, /id="scan-prs-person-select"/);
+    assert.match(html, /id="scan-prs-email"/);
     assert.match(html, /id="scan-prs-include-linked"/);
 });
 
@@ -45,6 +47,8 @@ test('scan-pr app posts discover payload and applies selected links', function()
 
     assert.match(appJs, /\/discover-pr-links/);
     assert.match(appJs, /target_branches:\s*targetBranches/);
+    assert.match(appJs, /function getScanPrSelectedAuthorEmails\(\)/);
+    assert.match(appJs, /author_emails\s*=\s*authorEmails/);
     assert.match(appJs, /include_already_linked:\s*includeAlreadyLinked/);
     assert.match(appJs, /\/apply-pr-links/);
     assert.match(appJs, /renderScanPrStatus/);

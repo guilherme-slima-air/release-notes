@@ -118,6 +118,8 @@
         scanPrsTargetBranches: document.getElementById('scan-prs-target-branches'),
         scanPrsSinceDate: document.getElementById('scan-prs-since-date'),
         scanPrsUntilDate: document.getElementById('scan-prs-until-date'),
+        scanPrsPersonSelect: document.getElementById('scan-prs-person-select'),
+        scanPrsEmail: document.getElementById('scan-prs-email'),
         scanPrsIncludeLinked: document.getElementById('scan-prs-include-linked'),
         scanPrsError: document.getElementById('scan-prs-error'),
         scanPrsInfo: document.getElementById('scan-prs-info'),
@@ -571,7 +573,7 @@
     }
 
     async function loadPeople() {
-        if (!el.peopleList || !el.scanPersonSelect) {
+        if (!el.peopleList || (!el.scanPersonSelect && !el.scanPrsPersonSelect)) {
             return;
         }
 
@@ -677,13 +679,18 @@
     }
 
     function syncPeopleSelect() {
-        if (!el.scanPersonSelect) return;
         const opts = ['<option value="">Selecionar pessoa...</option>'];
         state.people.forEach(function(person) {
             const label = person.name + ' - ' + person.email;
             opts.push('<option value="' + escapeHtml(String(person.id)) + '">' + escapeHtml(label) + '</option>');
         });
-        el.scanPersonSelect.innerHTML = opts.join('');
+        const html = opts.join('');
+        if (el.scanPersonSelect) {
+            el.scanPersonSelect.innerHTML = html;
+        }
+        if (el.scanPrsPersonSelect) {
+            el.scanPrsPersonSelect.innerHTML = html;
+        }
     }
 
     function renderRepos() {
@@ -1307,6 +1314,19 @@
         }).filter(Boolean);
 
         const manualEmails = parseAuthorEmails(el.scanEmail && el.scanEmail.value);
+        return Array.from(new Set(selectedPeople.concat(manualEmails)));
+    }
+
+    function getScanPrSelectedAuthorEmails() {
+        const selectedPeople = Array.from(el.scanPrsPersonSelect ? el.scanPrsPersonSelect.selectedOptions : []).map(function(option) {
+            const personId = Number(option.value || 0);
+            const person = state.people.find(function(item) {
+                return Number(item.id) === personId;
+            });
+            return String(person && person.email || '').trim().toLowerCase();
+        }).filter(Boolean);
+
+        const manualEmails = parseAuthorEmails(el.scanPrsEmail && el.scanPrsEmail.value);
         return Array.from(new Set(selectedPeople.concat(manualEmails)));
     }
 
@@ -2245,6 +2265,7 @@
             const since = String(el.scanPrsSinceDate && el.scanPrsSinceDate.value || '').trim();
             const until = String(el.scanPrsUntilDate && el.scanPrsUntilDate.value || '').trim();
             const includeAlreadyLinked = Boolean(el.scanPrsIncludeLinked && el.scanPrsIncludeLinked.checked);
+            const authorEmails = getScanPrSelectedAuthorEmails();
 
             const payload = {
                 front_id: frontId,
@@ -2253,6 +2274,7 @@
             };
             if (since) payload.since = since;
             if (until) payload.until = until;
+            if (authorEmails.length) payload.author_emails = authorEmails;
 
             const result = await api.post('/api/repos/' + repoId + '/discover-pr-links', payload);
             state.scanPrResults = Array.isArray(result.results) ? result.results : [];
